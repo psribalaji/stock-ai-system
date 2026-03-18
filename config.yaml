@@ -1,0 +1,103 @@
+# ─────────────────────────────────────────────────────────────────
+# Stock Analysis AI System — Central Configuration
+# ─────────────────────────────────────────────────────────────────
+
+# ── Trading Mode ──────────────────────────────────────────────────
+trading:
+  mode: paper                  # CHANGE TO "live" ONLY after Phase 2 gate passes
+  broker: alpaca
+  timezone: America/New_York
+
+# ── Asset Universe ────────────────────────────────────────────────
+assets:
+  stocks:
+    - NVDA
+    - QQQ
+    - GOOGL
+    - CRWD
+    - ORCL
+    - MSFT
+    - AAPL
+    - META
+    - AMD
+  crypto:
+    - BTC
+    - SOL
+  watchlist:                   # Not traded, just monitored for signals
+    - AVGO
+    - AMZN
+    - TSLA
+
+# ── Risk Management ───────────────────────────────────────────────
+risk:
+  max_position_pct:    0.05    # Max 5% of portfolio per position
+  max_sector_pct:      0.25    # Max 25% in any one sector
+  max_crypto_pct:      0.10    # Max 10% total crypto exposure
+  max_open_positions:  5       # Max concurrent open positions
+  min_confidence:      0.60    # Minimum signal confidence to trade
+  stop_loss_pct:       0.07    # Hard stop loss: 7% below entry
+  daily_loss_limit:    0.02    # Circuit breaker: 2% daily loss
+  max_drawdown_pct:    0.15    # Kill switch: 15% peak-to-trough
+
+# ── Signal Detection ──────────────────────────────────────────────
+signals:
+  lookback_days:       252     # 1 year of history for pattern matching
+  confidence_lookback: 60      # Days to compute rolling win rate
+  min_volume_ratio:    1.5     # Signal requires volume > 1.5x 20-day avg
+  rsi_oversold:        35      # RSI below this = potential buy signal
+  rsi_overbought:      70      # RSI above this = potential sell signal
+  ma_short:            50      # Short moving average period
+  ma_long:             200     # Long moving average period
+
+# ── Backtesting ───────────────────────────────────────────────────
+backtest:
+  train_start:         "2015-01-01"
+  train_end:           "2022-12-31"
+  validation_start:    "2023-01-01"
+  validation_end:      "2024-06-30"
+  test_start:          "2024-07-01"
+  test_end:            "2025-12-31"
+  slippage_pct:        0.0008  # 0.08% per trade
+  commission:          0.0     # Alpaca is commission-free
+
+# ── Quality Gate Thresholds ───────────────────────────────────────
+quality_gate:
+  min_cagr:            0.15    # 15% CAGR minimum
+  min_sharpe:          1.0     # Sharpe ratio minimum
+  max_drawdown:        0.25    # Max 25% drawdown allowed
+  min_win_rate:        0.45    # 45% win rate minimum
+  min_profit_factor:   1.5     # Gross profit / gross loss
+  min_calmar:          0.5     # CAGR / max drawdown
+  min_trades:          30      # Minimum trades for statistical validity
+
+# ── Drift Detection ───────────────────────────────────────────────
+drift:
+  sharpe_floor:        0.5     # Pause if rolling 60d Sharpe drops below
+  win_rate_drop:       0.15    # Flag if win rate drops 15% below baseline
+  drawdown_pause:      0.15    # Auto-pause at 15% drawdown
+  benchmark_lag:       0.10    # Flag if trailing QQQ by 10% over 90 days
+  check_frequency:     weekly  # How often drift detection runs
+
+# ── Data Sources ─────────────────────────────────────────────────
+data:
+  storage_path:        "./data"
+  s3_bucket:           "stock-ai-system-data"   # Your S3 bucket name
+  s3_prefix:           "market-data"
+  sync_to_s3:          false   # Set true in Phase 3
+  polygon_timeframe:   "day"   # day | hour | minute
+  alpaca_feed:         "iex"   # iex (free) | sip (paid)
+
+# ── Scheduling ────────────────────────────────────────────────────
+schedule:
+  data_sync_hour:      5       # 5am ET — fetch daily bars before market
+  signal_interval_min: 5       # Every 5 min during market hours
+  drift_check_day:     sun     # Weekly drift check: Sunday
+  drift_check_hour:    20      # 8pm ET
+  recalibration_months: [1, 4, 7, 10]  # Quarterly
+
+# ── Logging ──────────────────────────────────────────────────────
+logging:
+  level:               INFO    # DEBUG | INFO | WARNING | ERROR
+  log_path:            "./logs"
+  rotation:            "1 week"
+  retention:           "1 month"

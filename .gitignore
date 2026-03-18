@@ -1,0 +1,28 @@
+# ── Secrets — NEVER commit these ──
+.env
+*.pem
+*.key
+
+# ── Data — too large for git, sync via S3 ──
+data/
+logs/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+
+# ── LEAN ──
+lean/
+.lean/
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp

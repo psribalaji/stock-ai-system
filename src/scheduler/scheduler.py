@@ -1,0 +1,354 @@
+"""
+scheduler/scheduler.py — APScheduler job runner for the signal pipeline.
+
+Jobs (times are US/Eastern):
+  - data_sync:        05:00 daily     — fetch latest OHLCV from Polygon
+  - signal_pipeline:  every 5 min     — run DecisionEngine for all tickers
+                      (only fires during market hours 09:30–16:00 Mon–Fri)
+  - drift_check:      Sunday 20:00    — weekly ModelMonitor drift report
+  - recalibrate:      quarterly       — re-run backtests, update baselines
+
+Usage:
+    scheduler = TradingScheduler()
+    scheduler.start()          # blocking
+    scheduler.start_background()  # non-blocking (for tests / embedding)
+    scheduler.stop()
+"""
+from __future__ import annotations
+
+from datetime import datetime, time
+from typing import Callable, List, Optional
+
+import pandas as pd
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
+from loguru import logger
+from zoneinfo import ZoneInfo
+
+from src.config import get_config
+from src.ingestion.storage import ParquetStore
+from src.execution.decision_engine import DecisionEngine
+from src.risk.risk_manager import PortfolioState
+from src.monitoring.model_monitor import ModelMonitor, DriftReport
+
+
+ET = ZoneInfo("America/New_York")
+
+# Market hours (Eastern)
+_MARKET_OPEN  = time(9, 30)
+_MARKET_CLOSE = time(16, 0)
+
+
+def _is_weekend() -> bool:
+    """Return True if today is Saturday or Sunday (ET)."""
+    return datetime.now(ET).weekday() >= 5
+
+
+def _is_market_hours() -> bool:
+    """Return True if current ET time is within regular market hours (Mon–Fri)."""
+    now = datetime.now(ET)
+    if now.weekday() >= 5:   # Saturday=5, Sunday=6
+        return False
+    return _MARKET_OPEN <= now.time() <= _MARKET_CLOSE
+
+
+class TradingScheduler:
+    """
+    Orchestrates all scheduled jobs for the trading system.
+
+    Args:
+        decision_engine: Pre-built DecisionEngine (created fresh if None)
+        monitor:         Pre-built ModelMonitor (created fresh if None)
+        store:           Pre-built ParquetStore (created fresh if None)
+        on_decisions:    Optional callback called with List[TradeDecision]
+                         after each pipeline run (use for paper order submission)
+        on_drift:        Optional callback called with DriftReport after each drift check
+    """
+
+    def __init__(
+        self,
+        decision_engine: Optional[DecisionEngine] = None,
+        monitor: Optional[ModelMonitor] = None,
+        store: Optional[ParquetStore] = None,
+        on_decisions: Optional[Callable] = None,
+        on_drift: Optional[Callable] = None,
+    ) -> None:
+        self.config  = get_config()
+        self.engine  = decision_engine or DecisionEngine()
+        self.monitor = monitor or ModelMonitor()
+        self.store   = store or ParquetStore(self.config.data.storage_path)
+        self.on_decisions = on_decisions
+        self.on_drift     = on_drift
+
+        self._scheduler = BackgroundScheduler(timezone=str(ET))
+        self._running   = False
+        self._register_jobs()
+
+    # ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    def start_background(self) -> None:
+        """Start scheduler in the background (non-blocking)."""
+        if self._running:
+            logger.warning("[Scheduler] Already running")
+            return
+        self._scheduler.start()
+        self._running = True
+        logger.info("[Scheduler] Started (background)")
+
+    def start(self) -> None:
+        """Start scheduler and block until KeyboardInterrupt."""
+        self.start_background()
+        logger.info("[Scheduler] Running — press Ctrl+C to stop")
+        try:
+            import time as _time
+            while True:
+                _time.sleep(60)
+        except (KeyboardInterrupt, SystemExit):
+            self.stop()
+
+    def stop(self) -> None:
+        """Shutdown the scheduler gracefully."""
+        if self._running:
+            self._scheduler.shutdown(wait=False)
+            self._running = False
+            logger.info("[Scheduler] Stopped")
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    def get_jobs(self) -> List[str]:
+        """Return list of registered job IDs."""
+        return [job.id for job in self._scheduler.get_jobs()]
+
+    # ── Job registration ──────────────────────────────────────────────────────
+
+    def _register_jobs(self) -> None:
+        cfg = self.config.schedule
+
+        # 1. Daily data sync at 05:00 ET
+        self._scheduler.add_job(
+            self.job_data_sync,
+            CronTrigger(hour=cfg.data_sync_hour, minute=0, timezone=ET),
+            id="data_sync",
+            name="Daily OHLCV sync",
+            max_instances=1,
+            misfire_grace_time=300,
+        )
+
+        # 2. Signal pipeline every N minutes (market hours only)
+        self._scheduler.add_job(
+            self.job_signal_pipeline,
+            IntervalTrigger(minutes=cfg.signal_interval_min, timezone=ET),
+            id="signal_pipeline",
+            name="Signal pipeline",
+            max_instances=1,
+            misfire_grace_time=60,
+        )
+
+        # 3. Weekly drift check — Sunday at drift_check_hour ET
+        self._scheduler.add_job(
+            self.job_drift_check,
+            CronTrigger(
+                day_of_week=cfg.drift_check_day,
+                hour=cfg.drift_check_hour,
+                minute=0,
+                timezone=ET,
+            ),
+            id="drift_check",
+            name="Weekly drift check",
+            max_instances=1,
+        )
+
+        # 4. Quarterly recalibration — 1st of Jan/Apr/Jul/Oct at 06:00 ET
+        months = ",".join(str(m) for m in cfg.recalibration_months)
+        self._scheduler.add_job(
+            self.job_recalibrate,
+            CronTrigger(month=months, day=1, hour=6, minute=0, timezone=ET),
+            id="recalibrate",
+            name="Quarterly recalibration",
+            max_instances=1,
+        )
+
+        logger.info(f"[Scheduler] Registered jobs: {self.get_jobs()}")
+
+    # ── Jobs ──────────────────────────────────────────────────────────────────
+
+    def job_data_sync(self) -> None:
+        """
+        Fetch latest OHLCV bars from Polygon for all tradeable assets.
+        Skips on weekends.
+        """
+        now = datetime.now(ET)
+        if _is_weekend():
+            logger.debug("[Scheduler] data_sync skipped — weekend")
+            return
+
+        logger.info("[Scheduler] Running data_sync job")
+        tickers = self.config.assets.all_symbols
+
+        # Lazy import to avoid circular deps when testing
+        try:
+            from src.ingestion.market_data_service import MarketDataService
+            svc = MarketDataService()
+            for ticker in tickers:
+                try:
+                    df = svc.get_latest_bars(ticker)
+                    if not df.empty:
+                        self.store.save_ohlcv(ticker, df)
+                        logger.debug(f"[Scheduler] Synced {ticker}: {len(df)} bars")
+                except Exception as exc:
+                    logger.error(f"[Scheduler] data_sync failed for {ticker}: {exc}")
+        except Exception as exc:
+            logger.error(f"[Scheduler] data_sync job failed: {exc}")
+
+    def job_signal_pipeline(self) -> None:
+        """
+        Run the full signal pipeline for all tradeable tickers.
+        Only executes during market hours.
+        """
+        if not _is_market_hours():
+            logger.debug("[Scheduler] signal_pipeline skipped — outside market hours")
+            return
+
+        logger.info("[Scheduler] Running signal_pipeline job")
+
+        tickers  = self.config.assets.all_tradeable
+        data_map: dict  = {}
+        price_map: dict = {}
+
+        for ticker in tickers:
+            df = self.store.load_ohlcv(ticker)
+            if df.empty:
+                logger.warning(f"[Scheduler] No OHLCV data for {ticker} — skipping")
+                continue
+            data_map[ticker]  = df
+            price_map[ticker] = float(df["close"].iloc[-1])
+
+        if not data_map:
+            logger.warning("[Scheduler] signal_pipeline: no data available")
+            return
+
+        portfolio = self._build_portfolio_state()
+
+        try:
+            decisions = self.engine.decide_all(
+                tickers=list(data_map),
+                data_map=data_map,
+                price_map=price_map,
+                portfolio=portfolio,
+            )
+
+            if decisions:
+                df_out = self.engine.decisions_to_dataframe(decisions)
+                self.store.save_signals(df_out)
+                logger.info(f"[Scheduler] Pipeline: {len(decisions)} decision(s) saved")
+
+                if self.on_decisions:
+                    self.on_decisions(decisions)
+            else:
+                logger.info("[Scheduler] Pipeline: no approved decisions this cycle")
+
+        except Exception as exc:
+            logger.error(f"[Scheduler] signal_pipeline failed: {exc}")
+
+    def job_drift_check(self) -> None:
+        """
+        Run ModelMonitor drift detection across all strategies.
+        Logs a full report and calls on_drift callback if provided.
+        """
+        logger.info("[Scheduler] Running drift_check job")
+        try:
+            report = self.monitor.check_drift()
+            logger.info(f"[Scheduler] Drift check complete:\n{report.summary()}")
+
+            if self.on_drift:
+                self.on_drift(report)
+
+        except Exception as exc:
+            logger.error(f"[Scheduler] drift_check failed: {exc}")
+
+    def job_recalibrate(self) -> None:
+        """
+        Quarterly recalibration: re-run backtests on fresh data and update
+        ModelMonitor baselines.
+        """
+        logger.info("[Scheduler] Running recalibrate job")
+        try:
+            from lean.lean_bridge import LEANBridge
+            bridge = LEANBridge()
+            new_baselines: dict = {}
+
+            for ticker in self.config.assets.stocks[:3]:   # use first 3 stocks as proxy
+                df = self.store.load_ohlcv(ticker)
+                if df.empty:
+                    continue
+                for strategy in ["momentum", "trend_following", "volatility_breakout"]:
+                    try:
+                        result = bridge.run_python_backtest(strategy, df, ticker)
+                        if strategy not in new_baselines:
+                            new_baselines[strategy] = []
+                        new_baselines[strategy].append(result.win_rate)
+                    except Exception as exc:
+                        logger.warning(f"[Scheduler] Recalibration backtest failed "
+                                       f"{strategy}/{ticker}: {exc}")
+
+            # Average win-rates across tickers per strategy
+            averaged = {s: float(pd.Series(v).mean())
+                        for s, v in new_baselines.items() if v}
+            if averaged:
+                self.monitor.recalibrate(averaged)
+                logger.info(f"[Scheduler] Recalibration complete: {averaged}")
+            else:
+                logger.warning("[Scheduler] Recalibration: no results — baselines unchanged")
+
+        except Exception as exc:
+            logger.error(f"[Scheduler] recalibrate job failed: {exc}")
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _build_portfolio_state(self) -> PortfolioState:
+        """
+        Build a PortfolioState from the audit log.
+        Falls back to empty portfolio if no audit data exists.
+        """
+        try:
+            audit = self.store.load_audit()
+            total_value = 100_000.0  # paper account default
+
+            if audit.empty:
+                return PortfolioState(
+                    total_value_usd=total_value,
+                    cash_usd=total_value,
+                    open_positions=0,
+                    crypto_exposure_usd=0.0,
+                    daily_pnl_pct=0.0,
+                    peak_value_usd=total_value,
+                )
+
+            # Count open positions: BUYs without matching SELLs
+            open_count = 0
+            if "direction" in audit.columns and "ticker" in audit.columns:
+                buys  = set(audit[audit["direction"] == "BUY"]["ticker"].unique())
+                sells = set(audit[audit["direction"] == "SELL"]["ticker"].unique())
+                open_count = len(buys - sells)
+
+            return PortfolioState(
+                total_value_usd=total_value,
+                cash_usd=total_value,
+                open_positions=open_count,
+                crypto_exposure_usd=0.0,
+                daily_pnl_pct=0.0,
+                peak_value_usd=total_value,
+            )
+        except Exception as exc:
+            logger.warning(f"[Scheduler] Could not build portfolio state: {exc} — using default")
+            return PortfolioState(
+                total_value_usd=100_000.0,
+                cash_usd=100_000.0,
+                open_positions=0,
+                crypto_exposure_usd=0.0,
+                daily_pnl_pct=0.0,
+                peak_value_usd=100_000.0,
+            )
