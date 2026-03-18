@@ -73,6 +73,10 @@ class ParquetStore:
         df = pd.read_parquet(path, engine="pyarrow")
         df["timestamp"] = pd.to_datetime(df["timestamp"], utc=True)
 
+        # Convert nullable Int64 volume to float64 so pandas-ta can handle NA values
+        if "volume" in df.columns:
+            df["volume"] = df["volume"].astype("float64")
+
         if start:
             df = df[df["timestamp"].dt.date >= start]
         if end:
