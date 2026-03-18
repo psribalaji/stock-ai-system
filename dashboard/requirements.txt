@@ -1,0 +1,21 @@
+# Dashboard-only requirements for Streamlit Community Cloud.
+# pandas-ta is intentionally excluded — it's only used by the local
+# signal pipeline (FeatureEngine) and is incompatible with Python 3.14.
+
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+alpaca-py>=0.20.0
+polygon-api-client>=1.12.0
+finnhub-python>=2.4.19
+anthropic>=0.20.0
+APScheduler>=3.10.0
+boto3>=1.34.0
+streamlit>=1.32.0
+plotly>=5.20.0
+python-dotenv>=1.0.0
+loguru>=0.7.0
+pydantic>=2.5.0
+httpx>=0.26.0
+tenacity>=8.2.0
+pyyaml>=6.0.1
