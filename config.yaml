@@ -11,22 +11,54 @@ trading:
 # ── Asset Universe ────────────────────────────────────────────────
 assets:
   stocks:
+    # Tech — large cap
     - NVDA
-    - QQQ
-    - GOOGL
-    - CRWD
-    - ORCL
     - MSFT
     - AAPL
+    - GOOGL
     - META
     - AMD
+    - ORCL
+    - CRWD
+    - QQQ
+    # Tech — semiconductors & cloud
+    - TSM
+    - QCOM
+    - INTC
+    - CRM
+    - PLTR
+    - NET
+    - AVGO
+    - AMZN
+    # Tech — watchlist promoted
+    - TSLA
+    # Pharma / Healthcare
+    - LLY
+    - JNJ
+    - PFE
+    - ABBV
+    - MRNA
+    - UNH
+    # Energy
+    - XOM
+    - CVX
+    - NEE
+    - ENPH
+    # Defence
+    - LMT
+    - RTX
+    - NOC
+    - GD
+    # Finance
+    - JPM
+    - GS
   crypto:
     - BTC
     - SOL
-  watchlist:                   # Not traded, just monitored for signals
-    - AVGO
-    - AMZN
-    - TSLA
+  watchlist:                   # Signals computed but no orders placed
+    - ASML
+    - ARM
+    - SNOW
 
 # ── Risk Management ───────────────────────────────────────────────
 risk:
