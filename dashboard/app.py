@@ -388,7 +388,11 @@ def page_live_trading() -> None:
     st.subheader("Pre-flight Checklist")
     st.caption("All checks must pass before going live.")
 
-    trader = LiveTrader()
+    try:
+        from src.ingestion.alpaca_client import AlpacaClient
+        trader = LiveTrader(alpaca_client=AlpacaClient())
+    except Exception:
+        trader = LiveTrader()
 
     with st.spinner("Running pre-flight checks..."):
         report = trader.run_preflight()

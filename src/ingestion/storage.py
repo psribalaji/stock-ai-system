@@ -199,6 +199,7 @@ class ParquetStore:
 
         if df.empty:
             report["issues"].append("EMPTY: No data")
+            report["valid"] = False
             return report
 
         # Check required columns
@@ -264,7 +265,7 @@ class ParquetStore:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
         if "volume" in df.columns:
-            df["volume"] = pd.to_numeric(df["volume"], errors="coerce").astype("Int64")
+            df["volume"] = pd.to_numeric(df["volume"], errors="coerce").round(0).astype("Int64")
 
         # Drop duplicates
         df = df.drop_duplicates(subset=["timestamp"]).sort_values("timestamp")

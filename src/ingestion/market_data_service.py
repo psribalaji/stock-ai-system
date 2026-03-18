@@ -4,6 +4,7 @@ This is the single entry point for all OHLCV data needs.
 Coordinates between PolygonClient (historical) and AlpacaClient (real-time).
 """
 from __future__ import annotations
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional
@@ -96,6 +97,9 @@ class MarketDataService:
             except Exception as e:
                 logger.error(f"Failed to fetch {ticker}: {e}")
                 results[ticker] = {"rows": 0, "valid": False, "issues": [str(e)]}
+
+            # Polygon free tier: 5 requests/min — pause between tickers
+            time.sleep(13)
 
         self._log_fetch_summary(results)
         return results

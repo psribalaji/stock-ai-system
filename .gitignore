@@ -19,8 +19,9 @@ build/
 .mypy_cache/
 
 # ── LEAN ──
-lean/
 .lean/
+lean/backtests/
+lean/storage/
 
 # ── IDE ──
 .vscode/
