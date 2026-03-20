@@ -190,20 +190,52 @@ def page_signals() -> None:
 
 @st.cache_data(ttl=30)
 def _load_alpaca_portfolio():
-    """Fetch live account + positions from Alpaca. Returns (account_dict, positions_df)."""
+    """Fetch live account + positions + history + closed orders from Alpaca."""
     try:
         from src.ingestion.alpaca_client import AlpacaClient
+        from alpaca.trading.requests import GetPortfolioHistoryRequest, GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        import datetime as dt
+
         client  = AlpacaClient()
         account = client._trading_client.get_account()
         positions = client.get_positions()
+
+        # Portfolio history (daily equity curve)
+        history = client._trading_client.get_portfolio_history(
+            GetPortfolioHistoryRequest(period="1M", timeframe="1D")
+        )
+        history_df = pd.DataFrame({
+            "date":   [dt.datetime.fromtimestamp(t).date() for t in history.timestamp],
+            "equity": history.equity,
+            "pnl":    history.profit_loss,
+        })
+
+        # Closed filled orders (for realized P&L per ticker)
+        closed_orders = client._trading_client.get_orders(
+            GetOrdersRequest(status=QueryOrderStatus.CLOSED, limit=200)
+        )
+        order_rows = []
+        for o in closed_orders:
+            if o.filled_qty and float(o.filled_qty) > 0 and o.filled_avg_price:
+                order_rows.append({
+                    "ticker":    o.symbol,
+                    "side":      o.side.value,
+                    "qty":       float(o.filled_qty),
+                    "avg_price": float(o.filled_avg_price),
+                    "filled_at": o.filled_at,
+                })
+        orders_df = pd.DataFrame(order_rows)
+
         return {
             "portfolio_value": float(account.portfolio_value),
             "cash":            float(account.cash),
             "equity":          float(account.equity),
             "buying_power":    float(account.buying_power),
-        }, positions
+        }, positions, history_df, orders_df
+
     except Exception as exc:
-        return None, pd.DataFrame()
+        return None, pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 
 def page_portfolio() -> None:
@@ -211,7 +243,7 @@ def page_portfolio() -> None:
 
     STARTING_BALANCE = 100_000.0
 
-    acct, positions = _load_alpaca_portfolio()
+    acct, positions, history_df, orders_df = _load_alpaca_portfolio()
 
     # ── Account summary ───────────────────────────────────────────
     st.subheader("Account Summary")
@@ -236,6 +268,29 @@ def page_portfolio() -> None:
         m5.metric("Buying Power",     f"${acct['buying_power']:,.2f}")
     else:
         st.warning("Could not connect to Alpaca — showing cached audit data only.")
+
+    # ── Equity curve ──────────────────────────────────────────────
+    if history_df is not None and not history_df.empty and history_df["equity"].sum() > 0:
+        import plotly.graph_objects as go
+        active = history_df[history_df["equity"] > 0]
+        fig_eq = go.Figure()
+        fig_eq.add_trace(go.Scatter(
+            x=active["date"], y=active["equity"],
+            mode="lines+markers",
+            line=dict(color="cyan", width=2),
+            fill="tozeroy",
+            fillcolor="rgba(0,200,255,0.08)",
+            name="Portfolio Value",
+        ))
+        fig_eq.add_hline(y=STARTING_BALANCE, line_dash="dash", line_color="gray",
+                         annotation_text="Starting $100k")
+        fig_eq.update_layout(
+            title="Portfolio Value Over Time",
+            yaxis_title="Value ($)",
+            height=300,
+            margin=dict(t=40, b=20),
+        )
+        st.plotly_chart(fig_eq, use_container_width=True)
 
     st.divider()
 
@@ -321,6 +376,64 @@ def page_portfolio() -> None:
             "stop_loss_price", "order_id",
         ] if c in submitted.columns]
         st.dataframe(submitted[display_cols].reset_index(drop=True), use_container_width=True, height=300)
+
+    st.divider()
+
+    # ── Realized P&L per ticker ────────────────────────────────────
+    st.subheader("Realized P&L per Stock")
+    st.caption("Computed from filled Alpaca orders — BUY cost vs SELL proceeds per ticker.")
+
+    if orders_df is not None and not orders_df.empty:
+        import plotly.graph_objects as go
+
+        realized_rows = []
+        for ticker, grp in orders_df.groupby("ticker"):
+            buys  = grp[grp["side"] == "buy"]
+            sells = grp[grp["side"] == "sell"]
+            total_bought  = (buys["qty"]  * buys["avg_price"]).sum()
+            total_sold    = (sells["qty"] * sells["avg_price"]).sum()
+            qty_bought    = buys["qty"].sum()
+            qty_sold      = sells["qty"].sum()
+
+            if qty_sold > 0 and qty_bought > 0:
+                avg_buy_price = total_bought / qty_bought
+                realized_pnl  = total_sold - (qty_sold * avg_buy_price)
+                realized_pct  = realized_pnl / (qty_sold * avg_buy_price) if qty_sold > 0 else 0
+                realized_rows.append({
+                    "Ticker":          ticker,
+                    "Shares Bought":   round(qty_bought, 2),
+                    "Avg Buy $":       round(avg_buy_price, 2),
+                    "Shares Sold":     round(qty_sold, 2),
+                    "Proceeds $":      round(total_sold, 2),
+                    "Realized P&L $":  round(realized_pnl, 2),
+                    "Realized P&L %":  f"{realized_pct:+.2%}",
+                    "Result":          "✅ Profit" if realized_pnl >= 0 else "🔴 Loss",
+                })
+
+        if realized_rows:
+            pnl_df = pd.DataFrame(realized_rows).sort_values("Realized P&L $", ascending=False)
+            st.dataframe(pnl_df.reset_index(drop=True), use_container_width=True)
+
+            # Bar chart
+            colors = ["green" if v >= 0 else "red" for v in pnl_df["Realized P&L $"]]
+            fig_pnl = go.Figure(go.Bar(
+                x=pnl_df["Ticker"],
+                y=pnl_df["Realized P&L $"],
+                marker_color=colors,
+                text=[f"${v:+,.0f}" for v in pnl_df["Realized P&L $"]],
+                textposition="outside",
+            ))
+            fig_pnl.update_layout(
+                title="Realized P&L per Stock",
+                yaxis_title="P&L ($)",
+                height=320,
+                margin=dict(t=40, b=20),
+            )
+            st.plotly_chart(fig_pnl, use_container_width=True)
+        else:
+            st.info("No closed round-trip trades yet (need both a BUY and a SELL for the same ticker).")
+    else:
+        st.info("No order history available from Alpaca.")
 
 
 # ── Page: Monitor ─────────────────────────────────────────────────────────────
