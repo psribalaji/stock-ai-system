@@ -157,6 +157,20 @@ class AlpacaClient:
     # ── ORDER EXECUTION ──────────────────────────────────────────
 
     @retry(stop=stop_after_attempt(2), wait=wait_exponential(min=1, max=4))
+    def _submit_market_order_only(self, ticker: str, qty: float, side: str):
+        """Submit just the market order with retry."""
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+
+        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+        order_data = MarketOrderRequest(
+            symbol=ticker,
+            qty=qty,
+            side=order_side,
+            time_in_force=TimeInForce.DAY,
+        )
+        return self._trading_client.submit_order(order_data)
+
     def submit_market_order(
         self,
         ticker: str,
@@ -171,24 +185,13 @@ class AlpacaClient:
             ticker:          Stock symbol
             qty:             Number of shares (fractional supported)
             side:            "buy" or "sell"
-            stop_loss_price: If provided, attaches a stop loss order
+            stop_loss_price: If provided, attaches a stop loss order after the buy fills
 
         Returns:
             Order details dict
         """
-        from alpaca.trading.requests import MarketOrderRequest, TrailingStopOrderRequest
-        from alpaca.trading.enums import OrderSide, TimeInForce
-
-        order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
-
-        order_data = MarketOrderRequest(
-            symbol=ticker,
-            qty=qty,
-            side=order_side,
-            time_in_force=TimeInForce.DAY,
-        )
-
-        order = self._trading_client.submit_order(order_data)
+        # Market order is retried independently — stop loss failure won't re-trigger it
+        order = self._submit_market_order_only(ticker, qty, side)
         logger.info(
             f"Order submitted: {side.upper()} {qty} {ticker} "
             f"| ID: {order.id} | Mode: {'PAPER' if self.is_paper else 'LIVE'}"
@@ -204,10 +207,16 @@ class AlpacaClient:
             "paper":     self.is_paper,
         }
 
-        # Attach stop loss if specified
+        # Attach stop loss separately — failure here won't retry the market order
         if stop_loss_price and side.lower() == "buy":
-            self._attach_stop_loss(ticker, qty, stop_loss_price)
-            result["stop_loss_price"] = stop_loss_price
+            try:
+                self._attach_stop_loss(ticker, qty, stop_loss_price)
+                result["stop_loss_price"] = stop_loss_price
+            except Exception as exc:
+                logger.warning(
+                    f"Stop loss attachment failed for {ticker} "
+                    f"(order {order.id} still submitted): {exc}"
+                )
 
         return result
 

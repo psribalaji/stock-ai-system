@@ -122,6 +122,8 @@ class OrderExecutor:
 
         # ── Safety checks ─────────────────────────────────────────────────
         skip_reason = self._check_safety(decision)
+        if not skip_reason:
+            skip_reason = self._check_position(decision)
         if skip_reason:
             logger.warning(
                 f"[OrderExecutor] SKIPPED {decision.ticker} "
@@ -195,6 +197,30 @@ class OrderExecutor:
         logger.info("[OrderExecutor] Kill switch deactivated — trading resumed")
 
     # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _check_position(self, decision: TradeDecision) -> str:
+        """
+        Return a skip reason if position state conflicts with this order:
+          - BUY when we already hold a position → skip (prevents wash trade)
+          - SELL when we hold no position → skip (prevents accidental short)
+        Returns empty string if safe to proceed.
+        """
+        if self.dry_run:
+            return ""
+        try:
+            positions = self._get_client().get_positions()
+            held_tickers = set(positions["ticker"].tolist()) if not positions.empty else set()
+        except Exception as exc:
+            logger.warning(f"[OrderExecutor] Could not fetch positions for {decision.ticker}: {exc}")
+            return ""
+
+        if decision.direction == "BUY" and decision.ticker in held_tickers:
+            return f"already holding {decision.ticker} — skipping duplicate BUY"
+
+        if decision.direction == "SELL" and decision.ticker not in held_tickers:
+            return f"no position in {decision.ticker} — skipping SELL (would be short)"
+
+        return ""
 
     def _check_safety(self, decision: TradeDecision) -> str:
         """
