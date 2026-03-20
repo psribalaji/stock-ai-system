@@ -108,16 +108,15 @@ def _sidebar() -> str:
         st.cache_data.clear()
         st.rerun()
 
-    # Account snapshot when live
-    if is_live:
-        try:
-            from src.ingestion.alpaca_client import AlpacaClient
-            acct = AlpacaClient().get_account()
-            st.sidebar.metric("Portfolio", f"${acct['portfolio_value']:,.0f}")
-            st.sidebar.metric("Cash",      f"${acct['cash']:,.0f}")
-        except Exception:
-            st.sidebar.caption("Account data unavailable")
-    else:
+    # Account snapshot (always shown)
+    try:
+        from src.ingestion.alpaca_client import AlpacaClient
+        _acct = AlpacaClient()._trading_client.get_account()
+        _total = float(_acct.portfolio_value)
+        _pnl   = _total - 100_000
+        st.sidebar.metric("Portfolio",  f"${_total:,.0f}", delta=f"${_pnl:+,.0f}")
+        st.sidebar.metric("Cash",       f"${float(_acct.cash):,.0f}")
+    except Exception:
         st.sidebar.caption(
             f"Mode: **{cfg.trading.mode.upper()}**  \n"
             f"Universe: {', '.join(cfg.assets.all_tradeable)}"
@@ -189,66 +188,139 @@ def page_signals() -> None:
 
 # ── Page: Portfolio ───────────────────────────────────────────────────────────
 
+@st.cache_data(ttl=30)
+def _load_alpaca_portfolio():
+    """Fetch live account + positions from Alpaca. Returns (account_dict, positions_df)."""
+    try:
+        from src.ingestion.alpaca_client import AlpacaClient
+        client  = AlpacaClient()
+        account = client._trading_client.get_account()
+        positions = client.get_positions()
+        return {
+            "portfolio_value": float(account.portfolio_value),
+            "cash":            float(account.cash),
+            "equity":          float(account.equity),
+            "buying_power":    float(account.buying_power),
+        }, positions
+    except Exception as exc:
+        return None, pd.DataFrame()
+
+
 def page_portfolio() -> None:
     st.header("Portfolio")
 
+    STARTING_BALANCE = 100_000.0
+
+    acct, positions = _load_alpaca_portfolio()
+
+    # ── Account summary ───────────────────────────────────────────
+    st.subheader("Account Summary")
+
+    if acct:
+        total_value   = acct["portfolio_value"]
+        cash          = acct["cash"]
+        invested      = total_value - cash
+        total_pnl     = total_value - STARTING_BALANCE
+        total_pnl_pct = total_pnl / STARTING_BALANCE
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+        m1.metric("Total Value",      f"${total_value:,.2f}")
+        m2.metric("Cash Available",   f"${cash:,.2f}")
+        m3.metric("Invested",         f"${invested:,.2f}")
+        m4.metric(
+            "Total P&L",
+            f"${total_pnl:+,.2f}",
+            delta=f"{total_pnl_pct:+.2%}",
+            delta_color="normal",
+        )
+        m5.metric("Buying Power",     f"${acct['buying_power']:,.2f}")
+    else:
+        st.warning("Could not connect to Alpaca — showing cached audit data only.")
+
+    st.divider()
+
+    # ── Open positions ─────────────────────────────────────────────
+    st.subheader("Open Positions")
+
+    if positions is not None and not positions.empty:
+        pos = positions.copy()
+
+        # Add unrealized P&L %
+        if "unrealized_pl" in pos.columns and "market_value" in pos.columns:
+            pos["cost_basis"] = pos["market_value"] - pos["unrealized_pl"]
+            pos["pnl_pct"]    = pos["unrealized_pl"] / pos["cost_basis"].replace(0, float("nan"))
+
+        # Format for display
+        display_pos = pd.DataFrame({
+            "Ticker":       pos["ticker"],
+            "Shares":       pos["qty"],
+            "Avg Entry $":  pos.get("avg_entry_price", pd.Series(["—"] * len(pos))),
+            "Current $":    pos.get("current_price",   pd.Series(["—"] * len(pos))),
+            "Market Value": pos["market_value"].apply(lambda v: f"${v:,.2f}"),
+            "Unrealized P&L": pos["unrealized_pl"].apply(
+                lambda v: f"${v:+,.2f}" if pd.notna(v) else "—"
+            ),
+            "P&L %": pos["pnl_pct"].apply(
+                lambda v: f"{v:+.2%}" if pd.notna(v) else "—"
+            ) if "pnl_pct" in pos.columns else "—",
+            "Side": pos.get("side", pd.Series(["—"] * len(pos))),
+        })
+
+        st.dataframe(display_pos.reset_index(drop=True), use_container_width=True)
+
+        # Mini bar chart — P&L per ticker
+        if "unrealized_pl" in pos.columns:
+            import plotly.graph_objects as go
+            colors = ["green" if v >= 0 else "red" for v in pos["unrealized_pl"]]
+            fig = go.Figure(go.Bar(
+                x=pos["ticker"],
+                y=pos["unrealized_pl"],
+                marker_color=colors,
+                text=[f"${v:+,.0f}" for v in pos["unrealized_pl"]],
+                textposition="outside",
+            ))
+            fig.update_layout(
+                title="Unrealized P&L per Position",
+                yaxis_title="P&L ($)",
+                height=320,
+                margin=dict(t=40, b=20),
+            )
+            st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No open positions.")
+
+    st.divider()
+
+    # ── Closed trades from audit ───────────────────────────────────
+    st.subheader("Closed Trades")
     audit = _load_audit(days_back=90)
 
-    if audit.empty:
-        st.info("No trade records found. Portfolio will populate once paper trades are executed.")
-        cfg = get_config()
-        st.metric("Paper account cash", "$100,000")
-        st.metric("Open positions", "0")
-        return
+    submitted = audit[audit["status"] == "submitted"] if not audit.empty and "status" in audit.columns else pd.DataFrame()
 
-    # Summary metrics
-    total_trades = len(audit)
-    approved_col = "approved" if "approved" in audit.columns else None
-    approved = audit[audit[approved_col] == True] if approved_col else audit
-
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Total trades", total_trades)
-    m2.metric("Approved trades", len(approved))
-
-    if "pnl_pct" in audit.columns:
-        total_pnl = audit["pnl_pct"].sum() if not audit["pnl_pct"].isna().all() else 0.0
-        win_rate  = (audit["pnl_pct"] > 0).mean() if not audit["pnl_pct"].isna().all() else 0.0
-        m3.metric("Total P&L", _fmt_pct(total_pnl))
-        m4.metric("Win rate",  f"{win_rate:.1%}")
+    if submitted.empty:
+        st.info("No closed trades yet.")
     else:
-        m3.metric("Total P&L", "—")
-        m4.metric("Win rate",  "—")
+        # Summary metrics
+        total_trades = len(submitted)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Orders submitted", total_trades)
 
-    st.divider()
-
-    # Open positions (approximate — BUYs without matching SELLs)
-    st.subheader("Open Positions")
-    if "direction" in audit.columns and "ticker" in audit.columns:
-        buys  = audit[audit["direction"] == "BUY"]
-        sells = audit[audit["direction"] == "SELL"]
-        open_tickers = set(buys["ticker"].unique()) - set(sells["ticker"].unique())
-
-        if open_tickers:
-            open_df = buys[buys["ticker"].isin(open_tickers)]
-            display = [c for c in ["ticker", "strategy", "entry_price", "position_size_usd",
-                                   "stop_loss_price", "confidence", "timestamp"]
-                       if c in open_df.columns]
-            st.dataframe(open_df[display].reset_index(drop=True), use_container_width=True)
+        if "pnl_pct" in submitted.columns and not submitted["pnl_pct"].isna().all():
+            winners  = (submitted["pnl_pct"] > 0).sum()
+            win_rate = winners / total_trades
+            m2.metric("Win rate", f"{win_rate:.1%}")
+            m3.metric("Winners / Losers", f"{winners} / {total_trades - winners}")
         else:
-            st.info("No open positions.")
-    else:
-        st.info("Position data unavailable.")
+            m2.metric("Strategies", submitted["strategy"].nunique() if "strategy" in submitted.columns else "—")
+            m3.metric("Tickers traded", submitted["ticker"].nunique() if "ticker" in submitted.columns else "—")
 
-    st.divider()
-
-    # P&L by strategy
-    if "strategy" in audit.columns and "pnl_pct" in audit.columns:
-        st.subheader("P&L by Strategy")
-        by_strat = audit.groupby("strategy")["pnl_pct"].agg(["sum", "mean", "count"]).reset_index()
-        by_strat.columns = ["Strategy", "Total P&L", "Avg P&L", "Trades"]
-        by_strat["Total P&L"] = by_strat["Total P&L"].apply(_fmt_pct)
-        by_strat["Avg P&L"]   = by_strat["Avg P&L"].apply(_fmt_pct)
-        st.dataframe(by_strat, use_container_width=True)
+        # Table
+        display_cols = [c for c in [
+            "timestamp_submitted", "ticker", "direction", "strategy",
+            "qty", "entry_price", "position_size_usd", "confidence",
+            "stop_loss_price", "order_id",
+        ] if c in submitted.columns]
+        st.dataframe(submitted[display_cols].reset_index(drop=True), use_container_width=True, height=300)
 
 
 # ── Page: Monitor ─────────────────────────────────────────────────────────────
