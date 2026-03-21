@@ -99,7 +99,7 @@ def _sidebar() -> str:
 
     page = st.sidebar.radio(
         "Navigate",
-        ["Signals Today", "Portfolio", "Monitor", "Audit Log", "Live Trading"],
+        ["Signals Today", "Discovery", "Portfolio", "Monitor", "Audit Log", "Live Trading"],
         index=0,
     )
 
@@ -689,6 +689,9 @@ def main() -> None:
 
     if page == "Signals Today":
         page_signals()
+    elif page == "Discovery":
+        from dashboard.pages.discovery import render_discovery_page
+        render_discovery_page()
     elif page == "Portfolio":
         page_portfolio()
     elif page == "Monitor":

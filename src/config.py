@@ -96,6 +96,19 @@ class LoggingConfig(BaseModel):
     rotation: str = "1 week"
     retention: str = "1 month"
 
+class DiscoveryConfig(BaseModel):
+    enabled:              bool       = True
+    scan_interval_min:    int        = 30
+    pre_market_scan_hour: int        = 8
+    min_market_cap:       float      = 500_000_000.0
+    min_avg_volume:       float      = 500_000.0
+    min_price:            float      = 5.0
+    max_candidates:       int        = 20
+    mention_spike_factor: float      = 3.0
+    reddit_subreddits:    List[str]  = ["wallstreetbets", "investing", "stocks", "stockmarket"]
+    news_lookback_hours:  int        = 48
+    auto_approve:         bool       = False  # ALWAYS False — human approval required
+
 class AppConfig(BaseModel):
     trading: TradingConfig = Field(default_factory=TradingConfig)
     assets: AssetsConfig = Field(default_factory=AssetsConfig)
@@ -107,6 +120,7 @@ class AppConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
 
     @property
     def is_live(self) -> bool:

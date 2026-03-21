@@ -73,6 +73,7 @@ class TradingScheduler:
         store: Optional[ParquetStore] = None,
         on_decisions: Optional[Callable] = None,
         on_drift: Optional[Callable] = None,
+        on_discovery: Optional[Callable] = None,
     ) -> None:
         self.config  = get_config()
         self.engine  = decision_engine or DecisionEngine()
@@ -80,6 +81,7 @@ class TradingScheduler:
         self.store   = store or ParquetStore(self.config.data.storage_path)
         self.on_decisions = on_decisions
         self.on_drift     = on_drift
+        self.on_discovery = on_discovery
 
         self._scheduler = BackgroundScheduler(timezone=str(ET))
         self._running   = False
@@ -170,6 +172,32 @@ class TradingScheduler:
             name="Quarterly recalibration",
             max_instances=1,
         )
+
+        # 5 & 6. Discovery scan jobs (only if discovery.enabled is True)
+        disc_cfg = getattr(self.config, "discovery", None)
+        if disc_cfg and getattr(disc_cfg, "enabled", False):
+            pre_market_hour  = getattr(disc_cfg, "pre_market_scan_hour", 8)
+            scan_interval    = getattr(disc_cfg, "scan_interval_min", 30)
+
+            # Pre-market scan: 8am ET Mon-Fri
+            self._scheduler.add_job(
+                self.job_discovery_scan,
+                CronTrigger(hour=pre_market_hour, minute=0, day_of_week="mon-fri", timezone=ET),
+                id="discovery_premarket",
+                name="Pre-market discovery scan",
+                max_instances=1,
+                misfire_grace_time=300,
+            )
+
+            # Intraday scan: every N minutes (market hours guard inside job)
+            self._scheduler.add_job(
+                self.job_discovery_scan,
+                IntervalTrigger(minutes=scan_interval, timezone=ET),
+                id="discovery_intraday",
+                name="Intraday discovery scan",
+                max_instances=1,
+                misfire_grace_time=60,
+            )
 
         logger.info(f"[Scheduler] Registered jobs: {self.get_jobs()}")
 
@@ -268,6 +296,47 @@ class TradingScheduler:
 
         except Exception as exc:
             logger.error(f"[Scheduler] drift_check failed: {exc}")
+
+    def job_discovery_scan(self) -> None:
+        """
+        Run the discovery pipeline: scan news/Reddit for trending tickers,
+        screen them, add candidates, and expire stale ones.
+        Only fires during market hours for intraday trigger.
+        """
+        if not _is_market_hours():
+            # Allow pre-market (8am) trigger to pass; guard only truly off-hours
+            now = datetime.now(ET)
+            if now.time() < time(7, 30) or now.time() > time(17, 0):
+                logger.debug("[Scheduler] discovery_scan skipped — outside trading window")
+                return
+
+        logger.info("[Scheduler] Running discovery_scan job")
+
+        try:
+            from src.discovery.trend_scanner import TrendScanner
+            from src.discovery.stock_screener import StockScreener
+            from src.discovery.universe_manager import UniverseManager
+
+            scanner  = TrendScanner()
+            screener = StockScreener()
+            manager  = UniverseManager()
+
+            candidates = scanner.scan()
+            screened   = screener.screen(candidates)
+            passed     = [s for s in screened if s.passed]
+            added      = manager.add_candidates(passed)
+            manager.expire_old(days=14)
+
+            logger.info(
+                f"[Discovery] Scan complete: {len(candidates)} trending, "
+                f"{len(passed)} passed screening, {added} new candidates added"
+            )
+
+            if self.on_discovery:
+                self.on_discovery(passed)
+
+        except Exception as exc:
+            logger.error(f"[Scheduler] discovery_scan failed: {exc}")
 
     def job_recalibrate(self) -> None:
         """

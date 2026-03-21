@@ -209,6 +209,28 @@ Signals below 0.60 are **blocked** — never reach DecisionEngine.
 
 ---
 
+## Dynamic Universe Discovery (Phase 2.5)
+
+Files: src/discovery/trend_scanner.py, stock_screener.py, universe_manager.py
+Dashboard: dashboard/pages/discovery.py
+Tests: tests/test_discovery.py
+
+Purpose: Automatically surface trending stocks NOT in the predefined universe.
+Flow: TrendScanner → StockScreener → UniverseManager → human approval → signal pipeline
+
+Key rules:
+- auto_approve is ALWAYS False — human clicks Approve in dashboard before any ticker trades
+- Approved tickers enter signal pipeline but still need confidence >= 0.60 to generate orders
+- All existing RiskManager rules apply to dynamically approved tickers
+- Reddit scanning degrades gracefully if PRAW not installed (logs warning, returns [])
+- Never modify config.yaml automatically — approved tickers stored in data/discovery/watchlist.parquet
+- Ticker blocklist for Reddit parsing (common English words that look like tickers):
+  IT, AT, BE, DO, GO, IF, IN, IS, ME, MY, NO, OF, ON, OR, SO, TO, UP, US, WE,
+  ARE, FOR, THE, CAN, BIG, ALL, NEW, NOW, WHO, HOW, WHY, GET, SET, GOOD, REAL,
+  COST, MOVE, HIGH, FULL, OPEN, JUST, LAST, NEXT, ALSO, THEN, WELL, BACK, INTO
+
+---
+
 ## Current Task — Build Phase 1
 
 Files to create (in order):

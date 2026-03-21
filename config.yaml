@@ -133,3 +133,21 @@ logging:
   log_path:            "./logs"
   rotation:            "1 week"
   retention:           "1 month"
+
+# ── Dynamic Universe Discovery ────────────────────────────────────
+discovery:
+  enabled:              true
+  scan_interval_min:    30
+  pre_market_scan_hour: 8
+  min_market_cap:       500000000
+  min_avg_volume:       500000
+  min_price:            5.0
+  max_candidates:       20
+  mention_spike_factor: 3.0
+  reddit_subreddits:
+    - wallstreetbets
+    - investing
+    - stocks
+    - stockmarket
+  news_lookback_hours:  48
+  auto_approve:         false
