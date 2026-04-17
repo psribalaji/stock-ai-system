@@ -203,7 +203,7 @@ try:
         t.add_column("Status")
         for s in scored:
             status = "[green]PASS[/green]" if not s.blocked else f"[red]BLOCK: {s.block_reason}[/red]"
-            t.add_row(s.signal.pattern, f"{s.confidence:.3f}", status)
+            t.add_row(s.pattern, f"{s.confidence:.3f}", status)
         console.print(t)
 except Exception as e:
     fail(f"Confidence scoring failed: {e}")
@@ -220,7 +220,7 @@ news_summary = None
 llm_result = None
 
 try:
-    news = news_svc.get_latest_news(TICKER, limit=5)
+    news = news_svc.fetch_company_news(TICKER, days_back=3)
     news_summary = news_svc.get_sentiment_summary(TICKER)
     ok(f"Fetched {len(news)} news items for {TICKER}")
     info(f"Sentiment summary: {news_summary[:120]}...")
