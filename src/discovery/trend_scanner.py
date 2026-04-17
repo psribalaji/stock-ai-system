@@ -18,16 +18,36 @@ from src.config import get_config
 
 # ── Blocklist for Reddit — common English words that look like tickers ──────
 _REDDIT_BLOCKLIST: set[str] = {
+    # Common English words
     "IT", "AT", "BE", "DO", "GO", "IF", "IN", "IS", "ME", "MY", "NO", "OF",
-    "ON", "OR", "SO", "TO", "UP", "US", "WE",
+    "ON", "OR", "SO", "TO", "UP", "US", "WE", "AN", "AS",
     "ARE", "FOR", "THE", "CAN", "BIG", "ALL", "NEW", "NOW", "WHO", "HOW",
     "WHY", "GET", "SET", "GOOD", "REAL", "COST", "MOVE", "HIGH", "FULL",
     "OPEN", "JUST", "LAST", "NEXT", "ALSO", "THEN", "WELL", "BACK", "INTO",
-    "USD", "ETF", "CEO", "CFO", "IPO", "FDA", "SEC", "GDP", "IMO", "LOL",
-    "EPS", "YOY", "QOQ", "ATH", "FUD", "YOLO", "FOMO", "HODL", "BTFD",
-    "PUTS", "CALL", "CALLS", "BULL", "BEAR", "LONG", "SHORT",
+    "OVER", "FROM", "WITH", "THIS", "THAT", "THEY", "WHEN", "WILL", "MORE",
+    "BEEN", "HAVE", "SAID", "SAYS", "AFTER", "ABOUT", "THEIR", "WHICH",
+    "WOULD", "COULD", "SHOULD", "THERE", "THESE", "THOSE",
+    # Finance / trading terms
+    "USD", "ETF", "CEO", "CFO", "CTO", "COO", "IPO", "FDA", "SEC", "GDP",
+    "IMO", "LOL", "EPS", "YOY", "QOQ", "ATH", "FUD", "YOLO", "FOMO",
+    "HODL", "BTFD", "PUTS", "CALL", "CALLS", "BULL", "BEAR", "LONG", "SHORT",
     "BUY", "SELL", "HOLD", "PLAY", "MOON", "DUMP", "PUMP", "LOSS", "GAIN",
-    "CASH", "DEBT", "RISK", "SAFE",
+    "CASH", "DEBT", "RISK", "SAFE", "RATE", "BOND", "FUND", "BANK", "LOAN",
+    "RATE", "FOMC", "FED", "BOJ", "ECB", "IMF", "REPO", "LIBOR", "SOFR",
+    # Geopolitical / news organisations
+    "NATO", "IRAN", "IRAQ", "ISIS", "ISIL", "OPEC", "SWIFT", "BRICS",
+    "EU", "UK", "UN", "US", "UAE", "WHO", "WTO", "IMF", "IAEA",
+    "AI", "ML", "IT", "HR", "PR", "IR",
+    "INC", "LLC", "LTD", "CORP", "PLC", "ETF", "REIT",
+    # Common news words that appear in caps
+    "BREAKING", "UPDATE", "REPORT", "ALERT", "NEWS", "LIVE", "WATCH",
+    "SAYS", "TOLD", "WARN", "PLAN", "DEAL", "TALK", "MEET", "CALL",
+    # Press release / wire boilerplate
+    "FORM", "GLOBE", "WIRE", "RELEASE", "PRESS", "MEDIA", "GROUP", "PLC",
+    "CORP", "HOLD", "GLOBAL", "TRUST", "FUND", "REIT", "NYSE", "NASDAQ",
+    "CNBC", "MSNBC", "WSJ", "FT", "EUR", "GBP", "JPY", "CNY",
+    "NYC", "CEO", "DOJ", "FTC", "CFTC", "FINRA", "PCAOB",
+    "LNG", "EPT", "RI", "TV", "HRX", "ET", "HDFC",
 }
 
 _TICKER_PATTERN     = re.compile(r'\$([A-Z]{1,5})\b')
@@ -134,9 +154,9 @@ class TrendScanner:
             now       = datetime.now(timezone.utc)
             cutoff_ts = int((now - timedelta(hours=lookback_hours)).timestamp())
 
-            # Fetch general and forex categories
+            # Fetch general, merger (M&A deals = ticker-rich) and forex categories
             all_articles: list[dict] = []
-            for category in ("general", "forex"):
+            for category in ("general", "merger", "forex"):
                 try:
                     articles = client.general_news(category, min_id=0)
                     if articles:
@@ -163,13 +183,29 @@ class TrendScanner:
             for article in recent:
                 headline = article.get("headline", "")
                 summary  = article.get("summary", "")
+                related  = article.get("related", "") or ""
                 text     = f"{headline} {summary}"
 
-                tickers_found = _TICKER_PATTERN.findall(text)
-                for ticker in tickers_found:
+                # Strategy 1: explicit $TICKER mentions (rare in news but high confidence)
+                dollar_tickers = _TICKER_PATTERN.findall(text)
+
+                # Strategy 2: tickers in the 'related' field (Finnhub populates this for
+                # company-specific articles, e.g. "AAPL,MSFT")
+                related_tickers = [
+                    t.strip().upper() for t in related.split(",")
+                    if t.strip() and 1 < len(t.strip()) <= 5
+                ]
+
+                # Strategy 3: bare uppercase words in headline (e.g. "NVDA surges")
+                # Apply same blocklist as Reddit to filter noise
+                bare_tickers = [
+                    t for t in _REDDIT_TICKER_PAT.findall(headline)
+                    if t not in _REDDIT_BLOCKLIST and 2 <= len(t) <= 5
+                ]
+
+                all_found = set(dollar_tickers + related_tickers + bare_tickers)
+                for ticker in all_found:
                     if ticker in existing:
-                        continue
-                    if len(ticker) < 1 or len(ticker) > 5:
                         continue
                     ticker_mentions[ticker] += 1
                     ticker_sentiments[ticker].append(0.0)  # neutral default
@@ -177,16 +213,19 @@ class TrendScanner:
             if not ticker_mentions:
                 return []
 
-            # Estimate 30d average from the current window (scale up proportionally)
-            # 48h window → scale to 30 days: 30*24/48 = 15x
-            scale_factor = (30 * 24) / lookback_hours
+            # Spike = mention count in the window vs the minimum threshold.
+            # Without a true 30d history, we use total article count as a normaliser:
+            # a ticker mentioned in >1% of articles is notable; spike = count / baseline
+            # where baseline = 1 (i.e. being mentioned at all is the baseline).
+            # Spike threshold of 3.0 means mentioned 3+ times across all articles.
+            total_articles = max(len(recent), 1)
 
             results: list[TrendingTicker] = []
             for ticker, count in ticker_mentions.items():
-                estimated_30d_avg = count / scale_factor  # what 48h implies over 30d
-                # spike = current 48h rate vs the rolling average
-                # If estimated_30d_avg is very small, spike can be large
-                spike = count / max(estimated_30d_avg / 30, 1.0)
+                # Normalise by article count so a spike of 3.0 means the ticker
+                # appeared in ≥3% of articles (3 mentions per 100 articles baseline)
+                baseline = max(total_articles / 100, 1.0)
+                spike    = count / baseline
 
                 if spike < spike_factor:
                     continue

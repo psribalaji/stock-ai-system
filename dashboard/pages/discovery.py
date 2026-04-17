@@ -206,22 +206,54 @@ def render_discovery_page() -> None:
         screener = StockScreener()
         manager2 = UniverseManager()
 
-        with st.spinner("Scanning news and Reddit for trending tickers..."):
-            try:
+        try:
+            with st.spinner("Scanning news..."):
+                news_results   = scanner._scan_news_velocity()
+
+            with st.spinner("Scanning Reddit..."):
+                reddit_results = scanner._scan_reddit()
+
+            # Deduplicate and merge (same logic as scanner.scan())
+            with st.spinner("Screening candidates..."):
                 candidates = scanner.scan()
                 screened   = screener.screen(candidates)
                 passed     = [s for s in screened if s.passed]
                 added      = manager2.add_candidates(passed)
 
-                st.success(
-                    f"Scan complete — {len(candidates)} trending tickers found, "
-                    f"{len(passed)} passed screening, {added} new candidates added."
-                )
+            # ── Per-source breakdown ───────────────────────────────
+            st.markdown("**Scan Results:**")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("News mentions",    len(news_results),
+                      help="Tickers with a spike in Finnhub news mentions (48h vs 30d avg)")
+            c2.metric("Reddit mentions",  len(reddit_results),
+                      help="Tickers trending on WSB / investing / stocks subreddits")
+            c3.metric("Passed screening", len(passed),
+                      help="Met all 4 criteria: market cap, volume, price, Alpaca-tradeable")
+            c4.metric("New candidates",   added,
+                      help="Not already in watchlist — added for your review")
 
-                if candidates and not passed:
-                    st.info("No tickers passed all screening criteria this run.")
+            if len(news_results) == 0:
+                st.warning("News scan: 0 results — Finnhub returned no articles with ticker spikes "
+                           "above the 3x threshold, or API returned empty.")
+            if len(reddit_results) == 0:
+                st.warning("Reddit scan: 0 results — either REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET "
+                           "/ REDDIT_USER_AGENT are not set in .env, or no tickers had >10 mentions.")
 
-            except Exception as e:
-                st.error(f"Scan failed: {e}")
+            if candidates and not passed:
+                # Show why each candidate failed screening
+                st.markdown("**Why candidates failed screening:**")
+                failed = [s for s in screened if not s.passed]
+                for s in failed[:10]:
+                    st.caption(f"❌ **{s.ticker}**: {', '.join(s.fail_reasons)}")
+
+            if added > 0:
+                st.success(f"{added} new candidate(s) added — see Trending Now above.")
+            elif len(passed) > 0:
+                st.info("Candidates found but already in watchlist — no duplicates added.")
+            else:
+                st.info("No new candidates this scan.")
+
+        except Exception as e:
+            st.error(f"Scan failed: {e}")
 
         st.rerun()
