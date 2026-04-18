@@ -90,6 +90,7 @@ class ScheduleConfig(BaseModel):
     data_sync_hour: int = 5
     signal_interval_min: int = 30
     position_check_interval_min: int = 5
+    force_market_hours: bool = False
     drift_check_day: str = "sun"
     drift_check_hour: int = 20
     recalibration_months: List[int] = [1, 4, 7, 10]

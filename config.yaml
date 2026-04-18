@@ -127,6 +127,7 @@ schedule:
   data_sync_hour:      5       # 5am ET — fetch daily bars before market
   signal_interval_min: 30      # Every 30 min during market hours (new trade discovery)
   position_check_interval_min: 5  # Every 5 min (trailing stops + take profits)
+  force_market_hours: false    # Set true to run signals 24/7 (paper testing only)
   drift_check_day:     sun     # Weekly drift check: Sunday
   drift_check_hour:    20      # 8pm ET
   recalibration_months: [1, 4, 7, 10]  # Quarterly

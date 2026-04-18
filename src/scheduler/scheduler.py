@@ -46,7 +46,11 @@ def _is_weekend() -> bool:
 
 
 def _is_market_hours() -> bool:
-    """Return True if current ET time is within regular market hours (Mon–Fri)."""
+    """Return True if current ET time is within regular market hours (Mon–Fri).
+    Always returns True when schedule.force_market_hours is enabled (simulation mode)."""
+    cfg = get_config()
+    if cfg.schedule.force_market_hours:
+        return True
     now = datetime.now(ET)
     if now.weekday() >= 5:   # Saturday=5, Sunday=6
         return False

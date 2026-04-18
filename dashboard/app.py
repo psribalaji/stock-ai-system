@@ -99,7 +99,9 @@ def _sidebar() -> str:
 
     page = st.sidebar.radio(
         "Navigate",
-        ["Signals Today", "Discovery", "Portfolio", "Monitor", "Audit Log", "Live Trading"],
+        ["Signals Today", "Discovery", "Portfolio", "Monitor",
+         "Risk", "Strategy Performance", "Stops & TPs",
+         "Sentiment", "ML Ensemble", "Audit Log", "Live Trading"],
         index=0,
     )
 
@@ -696,6 +698,21 @@ def main() -> None:
         page_portfolio()
     elif page == "Monitor":
         page_monitor()
+    elif page == "Risk":
+        from dashboard.pages.risk import render_risk_page
+        render_risk_page()
+    elif page == "Strategy Performance":
+        from dashboard.pages.strategy_performance import render_strategy_performance_page
+        render_strategy_performance_page()
+    elif page == "Stops & TPs":
+        from dashboard.pages.stops_tp import render_stops_tp_page
+        render_stops_tp_page()
+    elif page == "Sentiment":
+        from dashboard.pages.sentiment import render_sentiment_page
+        render_sentiment_page()
+    elif page == "ML Ensemble":
+        from dashboard.pages.ml_ensemble_status import render_ml_ensemble_page
+        render_ml_ensemble_page()
     elif page == "Audit Log":
         page_audit()
     elif page == "Live Trading":

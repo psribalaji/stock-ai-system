@@ -471,6 +471,27 @@ class TestMarketHoursHelper:
             mock_dt.now.return_value = mock_now
             assert _is_market_hours() is False
 
+    def test_force_market_hours_bypasses_check(self):
+        """force_market_hours=True should make _is_market_hours() return True always."""
+        with patch("src.scheduler.scheduler.datetime") as mock_dt, \
+             patch("src.scheduler.scheduler.get_config") as mock_cfg:
+            # Sunday midnight — normally False
+            mock_now = MagicMock()
+            mock_now.weekday.return_value = 6
+            mock_dt.now.return_value = mock_now
+            mock_cfg.return_value.schedule.force_market_hours = True
+            assert _is_market_hours() is True
+
+    def test_force_market_hours_false_respects_hours(self):
+        """force_market_hours=False should respect normal market hours."""
+        with patch("src.scheduler.scheduler.datetime") as mock_dt, \
+             patch("src.scheduler.scheduler.get_config") as mock_cfg:
+            mock_now = MagicMock()
+            mock_now.weekday.return_value = 6  # Sunday
+            mock_dt.now.return_value = mock_now
+            mock_cfg.return_value.schedule.force_market_hours = False
+            assert _is_market_hours() is False
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Dashboard — importability (no Streamlit server needed)
