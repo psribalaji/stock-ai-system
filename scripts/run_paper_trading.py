@@ -12,10 +12,17 @@ What runs automatically:
 
 Usage:
     source .venv/bin/activate
+
+    # Normal mode — waits for market hours
     python scripts/run_paper_trading.py
 
-Press Ctrl+C to stop.
+    # Dry-run mode — fires pipeline ONCE immediately, prints decisions, exits
+    # Orders are logged but NOT submitted to Alpaca (safe to run any time)
+    python scripts/run_paper_trading.py --dry-run-now
+
+Press Ctrl+C to stop (normal mode).
 """
+import argparse
 import sys
 from pathlib import Path
 
@@ -77,11 +84,20 @@ def on_drift(report) -> None:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="StockAI paper trading runner")
+    parser.add_argument(
+        "--dry-run-now",
+        action="store_true",
+        help="Fire the signal pipeline once immediately (no orders submitted), then exit.",
+    )
+    args = parser.parse_args()
+
     cfg = get_config()
 
+    mode_label = "[yellow]DRY-RUN (one-shot)[/yellow]" if args.dry_run_now else f"[yellow]{cfg.trading.mode.upper()}[/yellow]"
     console.print(Panel.fit(
         "[bold cyan]StockAI — Paper Trading[/bold cyan]\n"
-        f"Mode: [yellow]{cfg.trading.mode.upper()}[/yellow]  |  "
+        f"Mode: {mode_label}  |  "
         f"Universe: {', '.join(cfg.assets.all_tradeable)}\n"
         f"Signal interval: every {cfg.schedule.signal_interval_min} min (market hours)",
         border_style="cyan",
@@ -90,7 +106,8 @@ def main() -> None:
     # ── Wire up components ────────────────────────────────────────────────────
     store    = ParquetStore(cfg.data.storage_path)
     monitor  = ModelMonitor()
-    executor = OrderExecutor()          # reads config.trading.mode → paper
+    # dry_run=True means orders are logged but never sent to Alpaca
+    executor = OrderExecutor(dry_run=args.dry_run_now)
     engine   = DecisionEngine()
 
     # Record completed trades in monitor (loads from existing audit log)
@@ -100,6 +117,10 @@ def main() -> None:
         if required.issubset(audit.columns):
             count = monitor.record_trades_from_df(audit)
             logger.info(f"[PaperTrading] Loaded {count} historical trades into monitor")
+
+    if args.dry_run_now:
+        _run_once(engine, executor, store)
+        return
 
     # ── Start scheduler ───────────────────────────────────────────────────────
     scheduler = TradingScheduler(
@@ -122,6 +143,74 @@ def main() -> None:
     )
 
     scheduler.start()   # blocking — runs until Ctrl+C
+
+
+def _run_once(engine: DecisionEngine, executor: OrderExecutor, store: ParquetStore) -> None:
+    """
+    Fire the full signal pipeline once across all tickers and print results.
+    Used by --dry-run-now. Orders are logged but not submitted (executor.dry_run=True).
+    """
+    cfg = get_config()
+    console.print("\n[bold cyan]── Dry-Run: one-shot pipeline ──[/bold cyan]")
+
+    from src.ingestion.alpaca_client import AlpacaClient
+    from src.risk.risk_manager import PortfolioState
+
+    alpaca   = AlpacaClient()
+    tickers  = cfg.assets.all_tradeable
+    data_map: dict = {}
+    price_map: dict = {}
+
+    console.print(f"Loading OHLCV for {len(tickers)} tickers...")
+    for ticker in tickers:
+        df = store.load_ohlcv(ticker)
+        if df.empty:
+            console.print(f"  [yellow]⚠[/yellow]  {ticker}: no local data — skipping")
+            continue
+        price = alpaca.get_latest_price(ticker)
+        if price is None:
+            price = float(df["close"].iloc[-1])   # fall back to last close
+            console.print(f"  [dim]{ticker}: live price unavailable, using last close ${price:.2f}[/dim]")
+        data_map[ticker]  = df
+        price_map[ticker] = price
+
+    console.print(f"  [green]✓[/green] {len(data_map)} tickers loaded\n")
+
+    portfolio = PortfolioState(
+        total_value_usd=100_000.0,
+        cash_usd=100_000.0,
+        open_positions=0,
+        crypto_exposure_usd=0.0,
+        daily_pnl_pct=0.0,
+        peak_value_usd=100_000.0,
+    )
+
+    console.print("Running signal pipeline...")
+    decisions = engine.decide_all(
+        tickers=list(data_map),
+        data_map=data_map,
+        price_map=price_map,
+        portfolio=portfolio,
+    )
+
+    approved = [d for d in decisions if d.approved]
+    console.print(f"  [green]✓[/green] Pipeline complete — {len(approved)} approved decision(s)\n")
+
+    if approved:
+        on_decisions(approved)
+        decision_map = {d.ticker: d for d in approved}
+        results = executor.execute_all(approved)
+        for r in results:
+            if r.status == "submitted" and r.direction == "BUY":
+                d = decision_map[r.ticker]
+                console.print(
+                    f"  [dim]trailing_stop=${d.trailing_stop_price:.2f}  "
+                    f"take_profit=${d.take_profit_price:.2f}  "
+                    f"ATR=${d.trailing_stop_atr:.2f}[/dim]"
+                )
+    else:
+        console.print("  [dim]No signals passed confidence + risk checks this run.[/dim]")
+        console.print("  [dim]This is normal — try again during high-volume market hours.[/dim]")
 
 
 def _handle_decisions(decisions, executor: OrderExecutor, display_callback) -> None:
