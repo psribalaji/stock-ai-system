@@ -317,10 +317,14 @@ class TradingScheduler:
             if not tickers_to_check:
                 return
 
+            # Use live Alpaca prices — Parquet is only updated at 5am and would
+            # give yesterday's close, making stop/TP checks meaningless intraday.
+            from src.ingestion.alpaca_client import AlpacaClient
+            alpaca = AlpacaClient()
             for ticker in tickers_to_check:
-                df = self.store.load_ohlcv(ticker)
-                if not df.empty:
-                    price_map[ticker] = float(df["close"].iloc[-1])
+                price = alpaca.get_latest_price(ticker)
+                if price is not None:
+                    price_map[ticker] = price
 
             if not price_map:
                 return

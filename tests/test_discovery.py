@@ -61,7 +61,7 @@ class TestTrendScanner:
     def test_scan_returns_list(self):
         """scan() should always return a list (even on empty results)."""
         with patch("src.discovery.trend_scanner.TrendScanner._scan_news_velocity", return_value=[]), \
-             patch("src.discovery.trend_scanner.TrendScanner._scan_reddit", return_value=[]):
+             patch("src.discovery.trend_scanner.TrendScanner._scan_apewisdom", return_value=[]):
             from src.discovery.trend_scanner import TrendScanner
             scanner = TrendScanner()
             result  = scanner.scan()
@@ -69,7 +69,7 @@ class TestTrendScanner:
 
     def test_scan_news_velocity_skips_existing_universe(self):
         """Tickers already in the asset universe should not be returned."""
-        from src.discovery.trend_scanner import TrendScanner, TrendingTicker
+        from src.discovery.trend_scanner import TrendScanner
         from src.config import get_config
 
         cfg = get_config()
@@ -77,59 +77,77 @@ class TestTrendScanner:
 
         with patch("src.discovery.trend_scanner.TrendScanner._scan_news_velocity",
                    return_value=[_make_trending(existing_ticker)]), \
-             patch("src.discovery.trend_scanner.TrendScanner._scan_reddit", return_value=[]):
+             patch("src.discovery.trend_scanner.TrendScanner._scan_apewisdom", return_value=[]):
             scanner = TrendScanner()
             result  = scanner.scan()
             tickers = [t.ticker for t in result]
             assert existing_ticker not in tickers
 
-    def test_scan_reddit_returns_empty_when_praw_missing(self):
-        """_scan_reddit() should return [] when praw is not importable."""
+    def test_scan_apewisdom_returns_empty_on_http_failure(self):
+        """_scan_apewisdom() should return [] when the API is unreachable."""
+        import httpx
         from src.discovery.trend_scanner import TrendScanner
 
         scanner = TrendScanner()
-        with patch.dict("sys.modules", {"praw": None}):
-            result = scanner._scan_reddit()
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__  = MagicMock(return_value=False)
+            mock_client.get.side_effect = httpx.ConnectError("unreachable")
+            mock_client_cls.return_value = mock_client
+            result = scanner._scan_apewisdom()
             assert result == []
 
-    def test_scan_reddit_filters_blocklist(self):
-        """
-        Words in the blocklist (e.g. 'CEO', 'BUY') should not appear as tickers
-        in Reddit scan output.
-        """
+    def test_scan_apewisdom_filters_blocklist(self):
+        """ApeWisdom results with blocklist tickers should be excluded."""
         from src.discovery.trend_scanner import TrendScanner, _REDDIT_BLOCKLIST
 
         scanner = TrendScanner()
+        blocklist_ticker = next(iter(_REDDIT_BLOCKLIST))  # e.g. "BUY"
 
-        # Simulate praw being available but returning posts with blocklist words
-        mock_praw  = MagicMock()
-        mock_reddit = MagicMock()
-        mock_sub   = MagicMock()
+        fake_rows = [
+            {"ticker": blocklist_ticker, "mentions": 500, "mentions_24h_ago": 50, "upvotes": 300},
+        ]
 
-        # Post text that only contains blocklist words
-        mock_post  = MagicMock()
-        mock_post.title       = "CEO BUY SELL HOLD IMO"
-        mock_post.selftext    = "FUD FOMO YOLO"
-        mock_post.upvote_ratio = 0.8
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__  = MagicMock(return_value=False)
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"results": fake_rows, "next_page": None}
+            mock_client.get.return_value = mock_resp
+            mock_client_cls.return_value = mock_client
 
-        mock_sub.hot.return_value = [mock_post] * 110
-        mock_sub.new.return_value = [mock_post] * 50
-        mock_reddit.subreddit.return_value = mock_sub
-        mock_praw.Reddit.return_value = mock_reddit
-
-        import os
-        with patch.dict("sys.modules", {"praw": mock_praw}), \
-             patch.dict(os.environ, {
-                 "REDDIT_CLIENT_ID":     "test_id",
-                 "REDDIT_CLIENT_SECRET": "test_secret",
-             }):
-            result = scanner._scan_reddit()
+            result = scanner._scan_apewisdom()
             tickers = [t.ticker for t in result]
-            for ticker in tickers:
-                assert ticker not in _REDDIT_BLOCKLIST, f"{ticker} should be filtered"
+            assert blocklist_ticker not in tickers
+
+    def test_scan_apewisdom_spike_ratio(self):
+        """Spike should be mentions_now / mentions_24h_ago."""
+        from src.discovery.trend_scanner import TrendScanner
+
+        scanner = TrendScanner()
+        fake_rows = [
+            {"ticker": "ZXYZ", "mentions": 200, "mentions_24h_ago": 20, "upvotes": 100},
+        ]
+
+        with patch("httpx.Client") as mock_client_cls, \
+             patch.object(scanner, "_get_sector_and_name", return_value=("Tech", "Zxyz Corp")), \
+             patch.object(scanner, "_get_price_and_market_cap", return_value=(50.0, 1e9)):
+            mock_client = MagicMock()
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__  = MagicMock(return_value=False)
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"results": fake_rows, "next_page": None}
+            mock_client.get.return_value = mock_resp
+            mock_client_cls.return_value = mock_client
+
+            result = scanner._scan_apewisdom()
+            assert len(result) == 1
+            assert result[0].mention_spike == 10.0  # 200 / 20
 
     def test_duplicates_deduplicated_across_sources(self):
-        """Same ticker from news and Reddit should be merged into one entry."""
+        """Same ticker from news and ApeWisdom should be merged into one entry."""
         from src.discovery.trend_scanner import TrendScanner
 
         same_ticker = "ZXYZ"
@@ -138,7 +156,7 @@ class TestTrendScanner:
 
         with patch("src.discovery.trend_scanner.TrendScanner._scan_news_velocity",
                    return_value=[news_hit]), \
-             patch("src.discovery.trend_scanner.TrendScanner._scan_reddit",
+             patch("src.discovery.trend_scanner.TrendScanner._scan_apewisdom",
                    return_value=[reddit_hit]):
             scanner = TrendScanner()
             result  = scanner.scan()
@@ -157,7 +175,7 @@ class TestTrendScanner:
 
         with patch("src.discovery.trend_scanner.TrendScanner._scan_news_velocity",
                    return_value=candidates), \
-             patch("src.discovery.trend_scanner.TrendScanner._scan_reddit", return_value=[]):
+             patch("src.discovery.trend_scanner.TrendScanner._scan_apewisdom", return_value=[]):
             scanner = TrendScanner()
             result  = scanner.scan()
             assert len(result) <= 20  # default max_candidates

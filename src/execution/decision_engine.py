@@ -38,6 +38,9 @@ class TradeDecision:
     entry_price: float
     stop_loss_price: float
     stop_loss_pct: float
+    trailing_stop_price: float  # ATR-based trailing stop (same as stop_loss if ATR unavailable)
+    trailing_stop_atr: float    # ATR value used — 0.0 if ATR unavailable
+    take_profit_price: float    # 2:1 reward-to-risk target
     signal_reason: str
     llm_reasoning: str          # From LLMAnalysisService (empty if unavailable)
     llm_summary: str
@@ -204,6 +207,9 @@ class DecisionEngine:
             entry_price=entry_price,
             stop_loss_price=risk_decision.stop_loss_price,
             stop_loss_pct=risk_decision.stop_loss_pct,
+            trailing_stop_price=risk_decision.trailing_stop_price,
+            trailing_stop_atr=risk_decision.trailing_stop_atr,
+            take_profit_price=risk_decision.take_profit_price,
             signal_reason=signal.reason,
             llm_reasoning=llm_reasoning,
             llm_summary=llm_summary,

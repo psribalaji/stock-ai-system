@@ -93,7 +93,7 @@ class TrendScanner:
         )
 
         news_results   = self._scan_news_velocity()
-        reddit_results = self._scan_reddit()
+        reddit_results = self._scan_apewisdom()
 
         # Merge: deduplicate by ticker, aggregate across sources
         merged: dict[str, TrendingTicker] = {}
@@ -258,98 +258,72 @@ class TrendScanner:
             logger.warning(f"[TrendScanner] _scan_news_velocity failed: {e}")
             return []
 
-    def _scan_reddit(self) -> list[TrendingTicker]:
+    def _scan_apewisdom(self) -> list[TrendingTicker]:
         """
-        Scan configured subreddits for trending tickers.
-        Uses PRAW library — returns [] gracefully if not installed or credentials missing.
+        Fetch trending stock tickers from ApeWisdom (https://apewisdom.io).
+        No API key required. Aggregates mentions from WSB, investing, stocks,
+        and stockmarket subreddits. Returns [] gracefully on any failure.
+
+        Spike ratio = mentions_now / max(1, mentions_24h_ago) — a real measured
+        ratio rather than an estimate, since ApeWisdom provides both values.
 
         Returns:
-            List of TrendingTicker from Reddit sources.
+            List of TrendingTicker from Reddit/ApeWisdom sources.
         """
         try:
-            import praw  # type: ignore
-        except ImportError:
-            logger.warning("[TrendScanner] PRAW not installed — Reddit scan skipped. "
-                           "Install with: pip install praw>=7.7.0")
-            return []
+            import httpx
 
-        try:
-            import os
-
-            client_id     = os.environ.get("REDDIT_CLIENT_ID")
-            client_secret = os.environ.get("REDDIT_CLIENT_SECRET")
-            user_agent    = os.environ.get("REDDIT_USER_AGENT", "StockAI/1.0")
-
-            if not client_id or not client_secret:
-                logger.warning("[TrendScanner] REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET "
-                               "not set — Reddit scan skipped")
-                return []
-
-            reddit = praw.Reddit(
-                client_id     = client_id,
-                client_secret = client_secret,
-                user_agent    = user_agent,
-            )
-
-            spike_factor  = getattr(
+            spike_factor = getattr(
                 getattr(self.config, "discovery", None), "mention_spike_factor", 3.0
             )
-            subreddits_cfg = getattr(
-                getattr(self.config, "discovery", None),
-                "reddit_subreddits",
-                ["wallstreetbets", "investing", "stocks", "stockmarket"],
-            )
-
             existing = set(self.config.assets.all_tradeable + self.config.assets.watchlist)
+            now      = datetime.now(timezone.utc)
 
-            ticker_mentions:  dict[str, int]          = defaultdict(int)
-            ticker_sentiments: dict[str, list[float]] = defaultdict(list)
+            # ApeWisdom paginates at 25 results per page; fetch pages 1–4 (top 100)
+            rows: list[dict] = []
+            with httpx.Client(timeout=10) as client:
+                for page in range(1, 5):
+                    try:
+                        resp = client.get(
+                            f"https://apewisdom.io/api/v1.0/filter/all-stocks/page/{page}"
+                        )
+                        resp.raise_for_status()
+                        data = resp.json()
+                        rows.extend(data.get("results", []))
+                        if not data.get("next_page"):
+                            break
+                    except Exception as e:
+                        logger.warning(f"[TrendScanner] ApeWisdom page {page} failed: {e}")
+                        break
 
-            for subreddit_name in subreddits_cfg:
-                try:
-                    sub = reddit.subreddit(subreddit_name)
-                    posts = list(sub.hot(limit=100)) + list(sub.new(limit=50))
+            if not rows:
+                logger.debug("[TrendScanner] ApeWisdom returned no results")
+                return []
 
-                    for post in posts:
-                        text = f"{post.title} {post.selftext if hasattr(post, 'selftext') else ''}"
-                        found = _REDDIT_TICKER_PAT.findall(text)
-
-                        for ticker in found:
-                            if ticker in _REDDIT_BLOCKLIST:
-                                continue
-                            if ticker in existing:
-                                continue
-                            if len(ticker) < 2 or len(ticker) > 5:
-                                continue
-
-                            ticker_mentions[ticker] += 1
-
-                            # Sentiment from upvote ratio: maps [0.5, 1.0] -> [0.0, 1.0]
-                            upvote_ratio = getattr(post, "upvote_ratio", 0.5)
-                            sentiment    = (upvote_ratio - 0.5) * 2
-                            ticker_sentiments[ticker].append(sentiment)
-
-                except Exception as e:
-                    logger.warning(f"[TrendScanner] Failed to scan r/{subreddit_name}: {e}")
-
-            now = datetime.now(timezone.utc)
             results: list[TrendingTicker] = []
 
-            for ticker, count in ticker_mentions.items():
-                if count < 10:
+            for row in rows:
+                ticker = (row.get("ticker") or "").strip().upper()
+                if not ticker or len(ticker) > 5:
+                    continue
+                if ticker in existing:
+                    continue
+                if ticker in _REDDIT_BLOCKLIST:
                     continue
 
-                # Estimate spike: assume normal baseline is ~2 mentions per scan
-                baseline = 2.0
-                spike    = count / baseline
+                mentions_now  = int(row.get("mentions", 0))
+                mentions_prev = int(row.get("mentions_24h_ago", 0))
+                upvotes       = int(row.get("upvotes", 0))
 
+                # Real spike: current 24h mentions vs prior 24h mentions
+                spike = mentions_now / max(1, mentions_prev)
                 if spike < spike_factor:
                     continue
 
-                avg_sentiment = (
-                    sum(ticker_sentiments[ticker]) / len(ticker_sentiments[ticker])
-                    if ticker_sentiments[ticker] else 0.0
-                )
+                # Sentiment: normalise upvote count relative to mentions
+                # (upvotes / max(mentions,1) capped at 1.0, then scaled to [-1, 1])
+                raw_sentiment   = min(upvotes / max(mentions_now, 1), 1.0)
+                avg_sentiment   = round((raw_sentiment * 2) - 1.0, 3)  # [0,1] → [-1,1]
 
                 company_name, sector = self._get_sector_and_name(ticker)
                 price, market_cap    = self._get_price_and_market_cap(ticker)
@@ -358,20 +332,20 @@ class TrendScanner:
                     ticker        = ticker,
                     company_name  = company_name,
                     sector        = sector,
-                    mention_count = count,
+                    mention_count = mentions_now,
                     mention_spike = round(spike, 2),
-                    avg_sentiment = round(avg_sentiment, 3),
+                    avg_sentiment = avg_sentiment,
                     sources       = ["reddit"],
                     first_seen    = now,
                     price         = price,
                     market_cap    = market_cap,
                 ))
 
-            logger.info(f"[TrendScanner] Reddit scan: {len(results)} trending tickers found")
+            logger.info(f"[TrendScanner] ApeWisdom scan: {len(results)} trending tickers found")
             return results
 
         except Exception as e:
-            logger.warning(f"[TrendScanner] _scan_reddit failed: {e}")
+            logger.warning(f"[TrendScanner] _scan_apewisdom failed: {e}")
             return []
 
     # ── Helpers ───────────────────────────────────────────────────────────────

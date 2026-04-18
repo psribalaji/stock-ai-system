@@ -106,6 +106,7 @@ def main() -> None:
         decision_engine=engine,
         monitor=monitor,
         store=store,
+        executor=executor,          # enables job_position_check (trailing stops + TPs)
         on_decisions=lambda decisions: _handle_decisions(decisions, executor, on_decisions),
         on_drift=on_drift,
     )
@@ -134,7 +135,17 @@ def _handle_decisions(decisions, executor: OrderExecutor, display_callback) -> N
     display_callback(approved)
 
     # Submit to Alpaca paper account
+    # Build a lookup so we can register stops after submission
+    decision_map = {d.ticker: d for d in approved}
     results = executor.execute_all(approved)
+
+    # Register trailing stops + take-profits for every submitted BUY so that
+    # the scheduler's 5-min job_position_check loop has something to track.
+    for r in results:
+        if r.status == "submitted" and r.direction == "BUY":
+            d = decision_map[r.ticker]
+            executor.register_trailing_stop(r.ticker, r.entry_price, d.trailing_stop_atr)
+            executor.register_take_profit(r.ticker, d.take_profit_price)
 
     submitted = [r for r in results if r.status == "submitted"]
     skipped   = [r for r in results if r.status == "skipped"]
