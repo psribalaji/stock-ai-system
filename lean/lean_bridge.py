@@ -42,7 +42,7 @@ class LEANBridge:
     generate signals, then simulates a simple long-only portfolio.
     """
 
-    STRATEGIES = ["momentum", "trend_following", "volatility_breakout"]
+    STRATEGIES = ["momentum", "trend_following", "volatility_breakout", "mean_reversion"]
     MIN_ROWS = 60          # minimum bars needed for feature computation
 
     def __init__(self) -> None:
@@ -232,6 +232,9 @@ class LEANBridge:
         elif name == "volatility_breakout":
             from src.signals.strategies.volatility_breakout import VolatilityBreakoutStrategy
             return VolatilityBreakoutStrategy()
+        elif name == "mean_reversion":
+            from src.signals.strategies.mean_reversion import MeanReversionStrategy
+            return MeanReversionStrategy()
         else:
             raise ValueError(f"Unknown strategy: '{name}'")
 

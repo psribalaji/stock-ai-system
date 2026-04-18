@@ -408,12 +408,12 @@ class TestLEANBridgePythonBacktest:
         with pytest.raises((ValueError, KeyError)):
             bridge.run_python_backtest("invalid_strategy_xyz", sample_ohlcv, "TEST")
 
-    def test_run_all_strategies_returns_three(self, bridge, sample_ohlcv):
-        """run_all_strategies() should return exactly 3 results."""
+    def test_run_all_strategies_returns_four(self, bridge, sample_ohlcv):
+        """run_all_strategies() should return exactly 4 results."""
         results = bridge.run_all_strategies(sample_ohlcv, "TEST")
-        assert len(results) == 3
+        assert len(results) == 4
         strategies = {r.strategy for r in results}
-        assert strategies == {"momentum", "trend_following", "volatility_breakout"}
+        assert strategies == {"momentum", "trend_following", "volatility_breakout", "mean_reversion"}
 
 
 # ── LEANBridge auto-mode Tests ────────────────────────────────────────────────

@@ -37,8 +37,11 @@ class RiskConfig(BaseModel):
     max_open_positions: int = 5
     min_confidence: float = 0.60
     stop_loss_pct: float = 0.07
+    trailing_stop_atr_mult: float = 2.0
+    reward_risk_ratio: float = 2.0
     daily_loss_limit: float = 0.02
     max_drawdown_pct: float = 0.15
+    max_portfolio_corr: float = 0.70
 
 class SignalsConfig(BaseModel):
     lookback_days: int = 252
@@ -85,7 +88,8 @@ class DataConfig(BaseModel):
 
 class ScheduleConfig(BaseModel):
     data_sync_hour: int = 5
-    signal_interval_min: int = 5
+    signal_interval_min: int = 30
+    position_check_interval_min: int = 5
     drift_check_day: str = "sun"
     drift_check_hour: int = 20
     recalibration_months: List[int] = [1, 4, 7, 10]
@@ -95,6 +99,13 @@ class LoggingConfig(BaseModel):
     log_path: str = "./logs"
     rotation: str = "1 week"
     retention: str = "1 month"
+
+class MLEnsembleConfig(BaseModel):
+    enabled: bool = False
+    min_training_trades: int = 300
+    buy_threshold: float = 0.55
+    sell_threshold: float = 0.45
+    model_path: str = "./data/ml_ensemble_model.pkl"
 
 class DiscoveryConfig(BaseModel):
     enabled:              bool       = True
@@ -120,6 +131,7 @@ class AppConfig(BaseModel):
     data: DataConfig = Field(default_factory=DataConfig)
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    ml_ensemble: MLEnsembleConfig = Field(default_factory=MLEnsembleConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
 
     @property

@@ -71,6 +71,7 @@ class TradingScheduler:
         decision_engine: Optional[DecisionEngine] = None,
         monitor: Optional[ModelMonitor] = None,
         store: Optional[ParquetStore] = None,
+        executor=None,
         on_decisions: Optional[Callable] = None,
         on_drift: Optional[Callable] = None,
         on_discovery: Optional[Callable] = None,
@@ -79,6 +80,7 @@ class TradingScheduler:
         self.engine  = decision_engine or DecisionEngine()
         self.monitor = monitor or ModelMonitor()
         self.store   = store or ParquetStore(self.config.data.storage_path)
+        self.executor = executor  # OrderExecutor for position checks
         self.on_decisions = on_decisions
         self.on_drift     = on_drift
         self.on_discovery = on_discovery
@@ -147,6 +149,16 @@ class TradingScheduler:
             name="Signal pipeline",
             max_instances=1,
             misfire_grace_time=60,
+        )
+
+        # 2b. Position check (trailing stops + take profits) every N minutes
+        self._scheduler.add_job(
+            self.job_position_check,
+            IntervalTrigger(minutes=cfg.position_check_interval_min, timezone=ET),
+            id="position_check",
+            name="Position check (stops + take-profits)",
+            max_instances=1,
+            misfire_grace_time=30,
         )
 
         # 3. Weekly drift check — Sunday at drift_check_hour ET
@@ -280,6 +292,51 @@ class TradingScheduler:
 
         except Exception as exc:
             logger.error(f"[Scheduler] signal_pipeline failed: {exc}")
+
+    def job_position_check(self) -> None:
+        """
+        Fast loop: check trailing stops and take-profit targets for held positions.
+        Only executes during market hours. Requires an executor to be injected.
+        """
+        if not _is_market_hours():
+            return
+
+        if self.executor is None:
+            logger.debug("[Scheduler] position_check skipped — no executor")
+            return
+
+        logger.debug("[Scheduler] Running position_check job")
+
+        try:
+            # Get current prices for held tickers only
+            price_map: dict = {}
+            trailing_stops = getattr(self.executor, "_trailing_stops", {})
+            take_profits = getattr(self.executor, "_take_profits", {})
+            tickers_to_check = set(trailing_stops.keys()) | set(take_profits.keys())
+
+            if not tickers_to_check:
+                return
+
+            for ticker in tickers_to_check:
+                df = self.store.load_ohlcv(ticker)
+                if not df.empty:
+                    price_map[ticker] = float(df["close"].iloc[-1])
+
+            if not price_map:
+                return
+
+            # Check take-profits first (higher priority)
+            tp_triggered = self.executor.check_take_profits(price_map)
+            for ticker in tp_triggered:
+                logger.info(f"[Scheduler] Take-profit triggered for {ticker}")
+
+            # Check trailing stops
+            stop_triggered = self.executor.update_trailing_stops(price_map)
+            for ticker in stop_triggered:
+                logger.info(f"[Scheduler] Trailing stop triggered for {ticker}")
+
+        except Exception as exc:
+            logger.error(f"[Scheduler] position_check failed: {exc}")
 
     def job_drift_check(self) -> None:
         """

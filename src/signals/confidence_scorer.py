@@ -33,6 +33,7 @@ class ScoredSignal:
     base_confidence: float      # historical win rate
     regime_multiplier: float
     volume_multiplier: float
+    sentiment_multiplier: float
     reason: str
     blocked: bool               # True if confidence < min_confidence
     block_reason: str
@@ -74,6 +75,16 @@ class ConfidenceScorer:
         "bb_squeeze_breakout_down":     0.66,
         "bb_lower_breakdown":           0.58,
         "vol_expansion_bear":           0.55,
+        # Mean reversion
+        "bb_lower_bounce":              0.62,
+        "oversold_reversal":            0.59,
+        "bb_mean_revert_up":            0.55,
+        "bb_upper_rejection":           0.61,
+        "overbought_reversal":          0.58,
+        "bb_mean_revert_down":          0.55,
+        # ML ensemble
+        "ml_ensemble_buy":              0.58,
+        "ml_ensemble_sell":             0.57,
     }
 
     def __init__(self, store=None) -> None:
@@ -90,14 +101,16 @@ class ConfidenceScorer:
         signal: RawSignal,
         ticker: str,
         features: Optional[dict] = None,
+        sentiment_score: float = 0.0,
     ) -> ScoredSignal:
         """
         Compute final confidence score for a single raw signal.
 
         Args:
-            signal:   RawSignal from a strategy
-            ticker:   Ticker symbol
-            features: Optional feature dict (uses signal.features_snapshot if not given)
+            signal:          RawSignal from a strategy
+            ticker:          Ticker symbol
+            features:        Optional feature dict (uses signal.features_snapshot if not given)
+            sentiment_score: -1.0 to 1.0 from LLM sentiment analysis (0.0 = neutral)
 
         Returns:
             ScoredSignal with final confidence and block status.
@@ -115,10 +128,14 @@ class ConfidenceScorer:
         high_volume = bool(feats.get("high_volume", 0))
         vol_mult = 1.05 if high_volume else 0.95
 
-        # 4. Final confidence (clamped)
-        final = min(1.0, max(0.0, base * regime_mult * vol_mult))
+        # 4. Sentiment adjustment: map -1.0..1.0 → 0.70..1.10
+        sentiment_mult = 1.0 + (sentiment_score * 0.10)
+        sentiment_mult = max(0.70, min(1.10, sentiment_mult))
 
-        # 5. Block check
+        # 5. Final confidence (clamped)
+        final = min(1.0, max(0.0, base * regime_mult * vol_mult * sentiment_mult))
+
+        # 6. Block check
         min_conf = self.config.risk.min_confidence
         blocked = final < min_conf
         block_reason = (
@@ -133,7 +150,8 @@ class ConfidenceScorer:
         else:
             logger.info(
                 f"[ConfidenceScorer] {ticker}/{signal.strategy} {signal.direction}: "
-                f"confidence={final:.3f} (base={base:.3f}, regime={regime_mult}, vol={vol_mult})"
+                f"confidence={final:.3f} (base={base:.3f}, regime={regime_mult}, "
+                f"vol={vol_mult}, sentiment={sentiment_mult:.2f})"
             )
 
         return ScoredSignal(
@@ -146,6 +164,7 @@ class ConfidenceScorer:
             base_confidence=base,
             regime_multiplier=regime_mult,
             volume_multiplier=vol_mult,
+            sentiment_multiplier=sentiment_mult,
             reason=signal.reason,
             blocked=blocked,
             block_reason=block_reason,
@@ -273,6 +292,7 @@ class ConfidenceScorer:
                 "base_confidence":   s.base_confidence,
                 "regime_multiplier": s.regime_multiplier,
                 "volume_multiplier": s.volume_multiplier,
+                "sentiment_multiplier": s.sentiment_multiplier,
                 "reason":            s.reason,
                 "blocked":           s.blocked,
                 "block_reason":      s.block_reason,

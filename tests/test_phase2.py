@@ -309,13 +309,13 @@ class TestSchedulerInit:
 
     def test_four_jobs_registered(self, scheduler):
         jobs = scheduler.get_jobs()
-        # At minimum the 4 core jobs are always registered.
+        # At minimum the 5 core jobs are always registered.
         # Discovery jobs may also be present when discovery.enabled is True.
-        assert len(jobs) >= 4
+        assert len(jobs) >= 5
 
     def test_job_ids_correct(self, scheduler):
         jobs = set(scheduler.get_jobs())
-        core_jobs = {"data_sync", "signal_pipeline", "drift_check", "recalibrate"}
+        core_jobs = {"data_sync", "signal_pipeline", "position_check", "drift_check", "recalibrate"}
         assert core_jobs.issubset(jobs)
 
     def test_start_background_sets_running(self, scheduler):

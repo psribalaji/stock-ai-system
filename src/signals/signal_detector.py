@@ -16,6 +16,7 @@ from src.features.feature_engine import FeatureEngine
 from src.signals.strategies.momentum import MomentumStrategy, RawSignal
 from src.signals.strategies.trend_following import TrendFollowingStrategy
 from src.signals.strategies.volatility_breakout import VolatilityBreakoutStrategy
+from src.signals.strategies.mean_reversion import MeanReversionStrategy
 
 
 class SignalDetector:
@@ -35,7 +36,13 @@ class SignalDetector:
             MomentumStrategy(),
             TrendFollowingStrategy(),
             VolatilityBreakoutStrategy(),
+            MeanReversionStrategy(),
         ]
+
+        # Conditionally add ML ensemble if enabled
+        if self.config.ml_ensemble.enabled:
+            from src.signals.strategies.ml_ensemble import MLEnsembleStrategy
+            self.strategies.append(MLEnsembleStrategy())
 
     def detect(self, ticker: str, df: pd.DataFrame) -> List[RawSignal]:
         """

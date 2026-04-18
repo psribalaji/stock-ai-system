@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+import pandas as pd
 from loguru import logger
 
 from src.config import get_config
@@ -33,6 +34,9 @@ class RiskDecision:
     position_size_usd: float    # Dollar amount
     stop_loss_price: float      # Hard stop price
     stop_loss_pct: float        # e.g. 0.07 = 7%
+    trailing_stop_price: float  # Initial trailing stop (entry - ATR * mult)
+    trailing_stop_atr: float    # ATR value used for trailing calc
+    take_profit_price: float    # Target price for profit taking
     risk_notes: list[str]       # Non-blocking observations
 
 
@@ -48,6 +52,14 @@ class PortfolioState:
     crypto_exposure_usd: float
     daily_pnl_pct: float        # e.g. -0.015 = -1.5% today
     peak_value_usd: float       # All-time peak for drawdown calc
+    held_tickers: list[str] = None  # Tickers currently in portfolio
+    price_data: dict = None     # {ticker: pd.Series of close prices} for correlation calc
+
+    def __post_init__(self):
+        if self.held_tickers is None:
+            self.held_tickers = []
+        if self.price_data is None:
+            self.price_data = {}
 
 
 class RiskManager:
@@ -73,6 +85,7 @@ class RiskManager:
         entry_price: float,
         portfolio: PortfolioState,
         ticker: str,
+        atr_value: float = 0.0,
     ) -> RiskDecision:
         """
         Validate a scored signal against all risk rules.
@@ -131,6 +144,20 @@ class RiskManager:
                 f"Max open positions reached ({portfolio.open_positions}/{cfg.max_open_positions})"
             )
 
+        # ── 4b. Portfolio correlation check ───────────────────────────
+        if portfolio.held_tickers and portfolio.price_data:
+            avg_corr = self._avg_correlation(ticker, portfolio)
+            if avg_corr is not None:
+                if avg_corr >= cfg.max_portfolio_corr:
+                    return self._block(
+                        f"Portfolio too correlated: avg correlation {avg_corr:.2f} "
+                        f">= limit {cfg.max_portfolio_corr}"
+                    )
+                if avg_corr >= cfg.max_portfolio_corr * 0.85:
+                    notes.append(
+                        f"Correlation {avg_corr:.2f} approaching limit {cfg.max_portfolio_corr}"
+                    )
+
         # ── 5. Crypto exposure ────────────────────────────────────────
         is_crypto = ticker in self.config.assets.crypto
         if is_crypto:
@@ -162,11 +189,25 @@ class RiskManager:
         # ── 7. Stop loss ──────────────────────────────────────────────
         stop_loss_price = entry_price * (1 - cfg.stop_loss_pct)
 
+        # Trailing stop: use ATR if available, else fall back to hard stop
+        trailing_stop_atr = atr_value
+        if atr_value > 0:
+            trailing_stop_price = entry_price - (cfg.trailing_stop_atr_mult * atr_value)
+            # Use the tighter of hard stop and trailing stop as initial stop
+            effective_stop = max(stop_loss_price, trailing_stop_price)
+        else:
+            trailing_stop_price = stop_loss_price
+            effective_stop = stop_loss_price
+
         # ── Approved ──────────────────────────────────────────────────
+        risk_per_share = entry_price - effective_stop
+        take_profit_price = entry_price + (cfg.reward_risk_ratio * risk_per_share)
+
         logger.info(
             f"[RiskManager] APPROVED {ticker} {signal.direction}: "
             f"size=${position_usd:,.2f} ({position_pct:.2%}), "
-            f"stop=${stop_loss_price:.2f} (-{cfg.stop_loss_pct:.2%})"
+            f"hard_stop=${stop_loss_price:.2f}, trailing_stop=${trailing_stop_price:.2f}, "
+            f"take_profit=${take_profit_price:.2f}"
         )
 
         return RiskDecision(
@@ -174,8 +215,11 @@ class RiskManager:
             block_reason="",
             position_size_pct=position_pct,
             position_size_usd=position_usd,
-            stop_loss_price=stop_loss_price,
+            stop_loss_price=effective_stop,
             stop_loss_pct=cfg.stop_loss_pct,
+            trailing_stop_price=trailing_stop_price,
+            trailing_stop_atr=trailing_stop_atr,
+            take_profit_price=take_profit_price,
             risk_notes=notes,
         )
 
@@ -223,6 +267,45 @@ class RiskManager:
         return max(0.0, dd)
 
     @staticmethod
+    def _avg_correlation(
+        candidate: str, portfolio: PortfolioState, lookback: int = 60
+    ) -> Optional[float]:
+        """
+        Compute average rolling correlation between candidate and held tickers.
+
+        Args:
+            candidate: Ticker to evaluate
+            portfolio: Portfolio with price_data and held_tickers
+            lookback:  Rolling window in days
+
+        Returns:
+            Average correlation as float, or None if insufficient data.
+        """
+        candidate_prices = portfolio.price_data.get(candidate)
+        if candidate_prices is None or len(candidate_prices) < lookback:
+            return None
+
+        correlations = []
+        for held in portfolio.held_tickers:
+            held_prices = portfolio.price_data.get(held)
+            if held_prices is None or len(held_prices) < lookback:
+                continue
+            # Align on common index, compute return correlation
+            combined = pd.DataFrame({"candidate": candidate_prices, "held": held_prices}).dropna()
+            if len(combined) < lookback:
+                continue
+            returns = combined.tail(lookback).pct_change().dropna()
+            if len(returns) < 20:
+                continue
+            corr = returns["candidate"].corr(returns["held"])
+            if pd.notna(corr):
+                correlations.append(corr)
+
+        if not correlations:
+            return None
+        return sum(correlations) / len(correlations)
+
+    @staticmethod
     def _block(reason: str) -> RiskDecision:
         """Return a blocked RiskDecision with the given reason."""
         logger.warning(f"[RiskManager] BLOCKED: {reason}")
@@ -233,6 +316,9 @@ class RiskManager:
             position_size_usd=0.0,
             stop_loss_price=0.0,
             stop_loss_pct=0.0,
+            trailing_stop_price=0.0,
+            trailing_stop_atr=0.0,
+            take_profit_price=0.0,
             risk_notes=[],
         )
 

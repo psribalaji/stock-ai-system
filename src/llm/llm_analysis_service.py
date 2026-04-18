@@ -183,6 +183,33 @@ class LLMAnalysisService:
             "llm_used": False,
         }
 
+    def score_sentiment(self, ticker: str, headlines: list[str]) -> float:
+        """
+        Score sentiment of headlines via LLM. Returns -1.0 to 1.0.
+        Falls back to 0.0 (neutral) on any failure.
+        """
+        if not headlines:
+            return 0.0
+
+        headlines_text = "\n".join(f"- {h}" for h in headlines[:10])
+        prompt = (
+            f"Score the overall sentiment of these {ticker} headlines "
+            f"for short-term stock price impact.\n\n"
+            f"{headlines_text}\n\n"
+            "Respond ONLY with JSON: {\"score\": <float between -1.0 and 1.0>}\n"
+            "-1.0 = very bearish, 0.0 = neutral, 1.0 = very bullish"
+        )
+
+        try:
+            result = self._call_llm_raw(prompt)
+            import json as _json
+            parsed = _json.loads(result)
+            score = float(parsed.get("score", 0.0))
+            return max(-1.0, min(1.0, score))
+        except Exception as exc:
+            logger.warning(f"[LLMAnalysisService] Sentiment scoring failed for {ticker}: {exc}")
+            return 0.0
+
     def enrich_news(self, ticker: str, headlines: list) -> str:
         """
         Summarize recent news headlines for a ticker.

@@ -68,8 +68,11 @@ risk:
   max_open_positions:  5       # Max concurrent open positions
   min_confidence:      0.60    # Minimum signal confidence to trade
   stop_loss_pct:       0.07    # Hard stop loss: 7% below entry
+  trailing_stop_atr_mult: 2.0  # Trailing stop: 2x ATR below highest price
+  reward_risk_ratio:     2.0  # Take profit at 2x the risk (entry - stop)
   daily_loss_limit:    0.02    # Circuit breaker: 2% daily loss
   max_drawdown_pct:    0.15    # Kill switch: 15% peak-to-trough
+  max_portfolio_corr:  0.70    # Block if avg correlation with held positions > 70%
 
 # ── Signal Detection ──────────────────────────────────────────────
 signals:
@@ -122,10 +125,19 @@ data:
 # ── Scheduling ────────────────────────────────────────────────────
 schedule:
   data_sync_hour:      5       # 5am ET — fetch daily bars before market
-  signal_interval_min: 5       # Every 5 min during market hours
+  signal_interval_min: 30      # Every 30 min during market hours (new trade discovery)
+  position_check_interval_min: 5  # Every 5 min (trailing stops + take profits)
   drift_check_day:     sun     # Weekly drift check: Sunday
   drift_check_hour:    20      # 8pm ET
   recalibration_months: [1, 4, 7, 10]  # Quarterly
+
+# ── ML Ensemble Strategy ──────────────────────────────────────────
+ml_ensemble:
+  enabled:             false   # Flip to true once you have 300+ trades
+  min_training_trades: 300     # Minimum labeled trades before model trains
+  buy_threshold:       0.55    # Predict probability > this → BUY
+  sell_threshold:      0.45    # Predict probability < this → SELL
+  model_path:          "./data/ml_ensemble_model.pkl"
 
 # ── Logging ──────────────────────────────────────────────────────
 logging:

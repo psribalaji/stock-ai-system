@@ -74,6 +74,8 @@ class OrderExecutor:
         self.store    = store or ParquetStore(self.config.data.storage_path)
         self.dry_run  = dry_run
         self._kill_switch_active = False
+        self._trailing_stops: dict[str, dict] = {}  # {ticker: {high_water, stop_price, atr}}
+        self._take_profits: dict[str, float] = {}   # {ticker: take_profit_price}
 
         mode = "DRY-RUN" if dry_run else self.config.trading.mode.upper()
         logger.info(f"[OrderExecutor] Initialised — mode: {mode}")
@@ -195,6 +197,118 @@ class OrderExecutor:
         """Manually deactivate the kill switch (requires human intervention)."""
         self._kill_switch_active = False
         logger.info("[OrderExecutor] Kill switch deactivated — trading resumed")
+
+    # ── Trailing stop management ──────────────────────────────────────────────
+
+    def register_trailing_stop(
+        self, ticker: str, entry_price: float, atr: float
+    ) -> None:
+        """Register a new trailing stop after a BUY order is submitted."""
+        mult = self.config.risk.trailing_stop_atr_mult
+        stop_price = entry_price - (mult * atr) if atr > 0 else entry_price * (1 - self.config.risk.stop_loss_pct)
+        self._trailing_stops[ticker] = {
+            "high_water": entry_price,
+            "stop_price": stop_price,
+            "atr": atr,
+        }
+        logger.info(
+            f"[OrderExecutor] Trailing stop registered for {ticker}: "
+            f"entry=${entry_price:.2f}, stop=${stop_price:.2f}, ATR=${atr:.2f}"
+        )
+
+    def update_trailing_stops(self, price_map: dict[str, float]) -> list[str]:
+        """
+        Update trailing stops with current prices. Call on each signal cycle.
+
+        Args:
+            price_map: {ticker: current_price}
+
+        Returns:
+            List of tickers whose trailing stop was triggered.
+        """
+        mult = self.config.risk.trailing_stop_atr_mult
+        triggered = []
+        for ticker, state in list(self._trailing_stops.items()):
+            price = price_map.get(ticker)
+            if price is None:
+                continue
+
+            # Trail up: if price made a new high, raise the stop
+            if price > state["high_water"]:
+                state["high_water"] = price
+                state["stop_price"] = price - (mult * state["atr"])
+                logger.debug(
+                    f"[OrderExecutor] Trailing stop raised for {ticker}: "
+                    f"high=${price:.2f}, new_stop=${state['stop_price']:.2f}"
+                )
+
+            # Check if stop triggered
+            if price <= state["stop_price"]:
+                logger.warning(
+                    f"[OrderExecutor] TRAILING STOP TRIGGERED for {ticker}: "
+                    f"price=${price:.2f} <= stop=${state['stop_price']:.2f}"
+                )
+                triggered.append(ticker)
+
+        # Remove triggered tickers
+        for ticker in triggered:
+            del self._trailing_stops[ticker]
+
+        return triggered
+
+    def get_trailing_stop(self, ticker: str) -> Optional[dict]:
+        """Get current trailing stop state for a ticker, or None."""
+        return self._trailing_stops.get(ticker)
+
+    def remove_trailing_stop(self, ticker: str) -> None:
+        """Remove trailing stop tracking for a ticker (e.g. after manual sell)."""
+        self._trailing_stops.pop(ticker, None)
+
+    # ── Take-profit management ────────────────────────────────────────────────
+
+    def register_take_profit(self, ticker: str, take_profit_price: float) -> None:
+        """Register a take-profit target after a BUY order is submitted."""
+        self._take_profits[ticker] = take_profit_price
+        logger.info(
+            f"[OrderExecutor] Take-profit registered for {ticker}: "
+            f"target=${take_profit_price:.2f}"
+        )
+
+    def check_take_profits(self, price_map: dict[str, float]) -> list[str]:
+        """
+        Check if any positions hit their take-profit target.
+
+        Args:
+            price_map: {ticker: current_price}
+
+        Returns:
+            List of tickers that hit their take-profit target.
+        """
+        triggered = []
+        for ticker, target in list(self._take_profits.items()):
+            price = price_map.get(ticker)
+            if price is None:
+                continue
+            if price >= target:
+                logger.info(
+                    f"[OrderExecutor] TAKE-PROFIT HIT for {ticker}: "
+                    f"price=${price:.2f} >= target=${target:.2f}"
+                )
+                triggered.append(ticker)
+
+        for ticker in triggered:
+            del self._take_profits[ticker]
+            self._trailing_stops.pop(ticker, None)  # clean up trailing stop too
+
+        return triggered
+
+    def get_take_profit(self, ticker: str) -> Optional[float]:
+        """Get take-profit target for a ticker, or None."""
+        return self._take_profits.get(ticker)
+
+    def remove_take_profit(self, ticker: str) -> None:
+        """Remove take-profit tracking for a ticker."""
+        self._take_profits.pop(ticker, None)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
