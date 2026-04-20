@@ -54,24 +54,26 @@ def render_discovery_page() -> None:
         # ── Compute current signal for each candidate ─────────────────────────
         @st.cache_data(ttl=300, show_spinner=False)
         def _get_signal(ticker: str) -> str:
-            """Run signal detector on local OHLCV. Returns BUY/SELL/HOLD/NO DATA."""
+            """Run signal detector on OHLCV (local Parquet → Alpaca fallback). Returns BUY/SELL/HOLD/NO DATA."""
             try:
                 from src.ingestion.storage import ParquetStore
+                from src.ingestion.alpaca_client import AlpacaClient
                 from src.signals.signal_detector import SignalDetector
                 from src.config import get_config
-                store    = ParquetStore(get_config().data.storage_path)
-                df       = store.load_ohlcv(ticker)
+                store = ParquetStore(get_config().data.storage_path)
+                df    = store.load_ohlcv(ticker)
                 if df.empty or len(df) < 50:
+                    # Discovery candidates won't be in local Parquet — fetch live
+                    df = AlpacaClient().get_recent_bars(ticker, days=90)
+                if df.empty or len(df) < 20:
                     return "NO DATA"
                 detector = SignalDetector()
                 signals  = detector.detect_actionable(ticker, df)
                 if not signals:
                     return "HOLD"
-                # Return the strongest non-HOLD signal direction
                 directions = [s.direction for s in signals if s.direction != "HOLD"]
                 if not directions:
                     return "HOLD"
-                # If mixed, prefer BUY (more interesting for approval decision)
                 return "BUY" if "BUY" in directions else directions[0]
             except Exception:
                 return "—"
