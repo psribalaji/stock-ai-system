@@ -235,7 +235,7 @@ class TradingScheduler:
             self.config.assets.all_symbols + UniverseManager().get_tradeable_universe()
         ))
 
-        # Lazy import to avoid circular deps when testing
+        # OHLCV sync
         try:
             from src.ingestion.market_data_service import MarketDataService
             svc = MarketDataService()
@@ -249,6 +249,23 @@ class TradingScheduler:
                     logger.error(f"[Scheduler] data_sync failed for {ticker}: {exc}")
         except Exception as exc:
             logger.error(f"[Scheduler] data_sync job failed: {exc}")
+
+        # News sync (Finnhub — runs after OHLCV, failures don't block pipeline)
+        try:
+            import time as _time
+            from src.ingestion.news_service import NewsService
+            news_svc = NewsService()
+            for ticker in tickers:
+                try:
+                    news_df = news_svc.fetch_company_news(ticker, days_back=2)
+                    if not news_df.empty:
+                        self.store.save_news(ticker, news_df)
+                        logger.debug(f"[Scheduler] News synced {ticker}: {len(news_df)} articles")
+                    _time.sleep(0.5)  # Finnhub free tier: 60 req/min
+                except Exception as exc:
+                    logger.warning(f"[Scheduler] News sync failed for {ticker}: {exc}")
+        except Exception as exc:
+            logger.error(f"[Scheduler] news_sync job failed: {exc}")
 
     def job_signal_pipeline(self) -> None:
         """
