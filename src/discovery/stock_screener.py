@@ -4,6 +4,7 @@ fundamental and tradability criteria.
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Optional
@@ -70,6 +71,7 @@ class StockScreener:
         for tt in candidates:
             result = self._screen_one(tt)
             results.append(result)
+            time.sleep(0.25)  # stay within Polygon free tier (~5 req/s limit)
         return results
 
     # ── Private screening methods ─────────────────────────────────────────────
