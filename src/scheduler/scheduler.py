@@ -230,7 +230,10 @@ class TradingScheduler:
             return
 
         logger.info("[Scheduler] Running data_sync job")
-        tickers = self.config.assets.all_symbols
+        from src.discovery.universe_manager import UniverseManager
+        tickers = list(dict.fromkeys(
+            self.config.assets.all_symbols + UniverseManager().get_tradeable_universe()
+        ))
 
         # Lazy import to avoid circular deps when testing
         try:
@@ -258,7 +261,8 @@ class TradingScheduler:
 
         logger.info("[Scheduler] Running signal_pipeline job")
 
-        tickers  = self.config.assets.all_tradeable
+        from src.discovery.universe_manager import UniverseManager
+        tickers  = UniverseManager().get_tradeable_universe()
         data_map: dict  = {}
         price_map: dict = {}
 
