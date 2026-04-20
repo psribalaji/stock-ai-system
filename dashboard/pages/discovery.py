@@ -51,6 +51,36 @@ def render_discovery_page() -> None:
         if "mention_spike" in candidates_df.columns:
             candidates_df = candidates_df.sort_values("mention_spike", ascending=False)
 
+        # ── Compute current signal for each candidate ─────────────────────────
+        @st.cache_data(ttl=300, show_spinner=False)
+        def _get_signal(ticker: str) -> str:
+            """Run signal detector on local OHLCV. Returns BUY/SELL/HOLD/NO DATA."""
+            try:
+                from src.ingestion.storage import ParquetStore
+                from src.signals.signal_detector import SignalDetector
+                from src.config import get_config
+                store    = ParquetStore(get_config().data.storage_path)
+                df       = store.load_ohlcv(ticker)
+                if df.empty or len(df) < 50:
+                    return "NO DATA"
+                detector = SignalDetector()
+                signals  = detector.detect_actionable(ticker, df)
+                if not signals:
+                    return "HOLD"
+                # Return the strongest non-HOLD signal direction
+                directions = [s.direction for s in signals if s.direction != "HOLD"]
+                if not directions:
+                    return "HOLD"
+                # If mixed, prefer BUY (more interesting for approval decision)
+                return "BUY" if "BUY" in directions else directions[0]
+            except Exception:
+                return "—"
+
+        signal_map = {row["ticker"]: _get_signal(row["ticker"])
+                      for _, row in candidates_df.iterrows()}
+
+        _SIGNAL_ICON = {"BUY": "🟢 BUY", "SELL": "🔴 SELL", "HOLD": "⚪ HOLD", "NO DATA": "⬛ NO DATA", "—": "—"}
+
         # Display table with action buttons
         display_cols = [
             "ticker", "company_name", "sector", "mention_spike",
@@ -58,7 +88,6 @@ def render_discovery_page() -> None:
         ]
         show_cols = [c for c in display_cols if c in candidates_df.columns]
 
-        # Rename for display
         rename_map = {
             "ticker":        "Ticker",
             "company_name":  "Company",
@@ -71,6 +100,11 @@ def render_discovery_page() -> None:
             "added_at":      "Added",
         }
         display_df = candidates_df[show_cols].rename(columns=rename_map)
+
+        # Inject signal column right after Ticker
+        display_df.insert(1, "Signal", display_df["Ticker"].map(
+            lambda t: _SIGNAL_ICON.get(signal_map.get(t, "—"), "—")
+        ))
 
         # Format numeric columns
         if "Mention Spike" in display_df.columns:
@@ -93,23 +127,26 @@ def render_discovery_page() -> None:
         if "Added" in display_df.columns:
             display_df["Added"] = pd.to_datetime(display_df["Added"]).dt.strftime("%Y-%m-%d %H:%M")
 
+        st.caption("🟢 BUY / 🔴 SELL = signal detected on local data  |  ⚪ HOLD = no pattern  |  ⬛ NO DATA = fetch OHLCV first")
         st.dataframe(display_df.reset_index(drop=True), use_container_width=True)
 
         # Approve / Ignore buttons per ticker
         st.caption("Approve or ignore each candidate:")
         for _, row in candidates_df.iterrows():
             ticker = row["ticker"]
+            sig    = signal_map.get(ticker, "—")
             col_ticker, col_approve, col_ignore = st.columns([2, 1, 1])
             with col_ticker:
-                spike = row.get("mention_spike", 0)
-                st.write(f"**{ticker}** — {row.get('company_name', '')} ({spike:.1f}x spike)")
+                spike    = row.get("mention_spike", 0)
+                sig_icon = _SIGNAL_ICON.get(sig, "—")
+                st.write(f"**{ticker}** {sig_icon} — {row.get('company_name', '')} ({spike:.1f}x spike)")
             with col_approve:
-                if st.button(f"Approve", key=f"approve_{ticker}"):
+                if st.button("Approve", key=f"approve_{ticker}"):
                     manager.approve(ticker)
                     st.toast(f"{ticker} approved for trading universe!", icon="✅")
                     st.rerun()
             with col_ignore:
-                if st.button(f"Ignore", key=f"ignore_{ticker}"):
+                if st.button("Ignore", key=f"ignore_{ticker}"):
                     manager.ignore(ticker)
                     st.toast(f"{ticker} ignored.", icon="✗")
                     st.rerun()
