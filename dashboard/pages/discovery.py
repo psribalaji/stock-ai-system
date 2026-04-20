@@ -64,6 +64,11 @@ def _explain_signal(ticker: str) -> dict:
 
 def _render_signal_explanation(ticker: str) -> None:
     """Render the explain section for a ticker."""
+    from dashboard.widgets.price_chart import render_price_chart
+
+    # ── Price chart first
+    render_price_chart(ticker, period="3mo", show_controls=True, key_prefix=f"explain_{ticker}_")
+
     data = _explain_signal(ticker)
 
     if "error" in data:

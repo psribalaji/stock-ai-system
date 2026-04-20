@@ -1,0 +1,1 @@
+from dashboard.widgets.price_chart import render_price_chart
