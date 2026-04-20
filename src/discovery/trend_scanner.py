@@ -18,9 +18,9 @@ from src.config import get_config
 
 # ── Blocklist for Reddit — common English words that look like tickers ──────
 _REDDIT_BLOCKLIST: set[str] = {
-    # Common English words
-    "IT", "AT", "BE", "DO", "GO", "IF", "IN", "IS", "ME", "MY", "NO", "OF",
-    "ON", "OR", "SO", "TO", "UP", "US", "WE", "AN", "AS",
+    # Common English words (BE/ON/ET/GO/IT/OR removed — real tickers)
+    "AT", "DO", "IF", "IN", "IS", "ME", "MY", "NO", "OF",
+    "SO", "TO", "UP", "US", "WE", "AN", "AS",
     "ARE", "FOR", "THE", "CAN", "BIG", "ALL", "NEW", "NOW", "WHO", "HOW",
     "WHY", "GET", "SET", "GOOD", "REAL", "COST", "MOVE", "HIGH", "FULL",
     "OPEN", "JUST", "LAST", "NEXT", "ALSO", "THEN", "WELL", "BACK", "INTO",
@@ -37,7 +37,7 @@ _REDDIT_BLOCKLIST: set[str] = {
     # Geopolitical / news organisations
     "NATO", "IRAN", "IRAQ", "ISIS", "ISIL", "OPEC", "SWIFT", "BRICS",
     "EU", "UK", "UN", "US", "UAE", "WHO", "WTO", "IMF", "IAEA",
-    "AI", "ML", "IT", "HR", "PR", "IR",
+    "ML", "PR", "IR",  # AI/IT/HR removed — real tickers (C3.ai, Gartner, Healthcare Realty)
     "INC", "LLC", "LTD", "CORP", "PLC", "ETF", "REIT",
     # Common news words that appear in caps
     "BREAKING", "UPDATE", "REPORT", "ALERT", "NEWS", "LIVE", "WATCH",
@@ -47,7 +47,7 @@ _REDDIT_BLOCKLIST: set[str] = {
     "CORP", "HOLD", "GLOBAL", "TRUST", "FUND", "REIT", "NYSE", "NASDAQ",
     "CNBC", "MSNBC", "WSJ", "FT", "EUR", "GBP", "JPY", "CNY",
     "NYC", "CEO", "DOJ", "FTC", "CFTC", "FINRA", "PCAOB",
-    "LNG", "EPT", "RI", "TV", "HRX", "ET", "HDFC",
+    "LNG", "EPT", "RI", "TV", "HRX", "HDFC",  # ET removed — real ticker (Energy Transfer)
     # File formats / tech abbreviations common on Reddit
     "CSV", "API", "SQL", "JSON", "XML", "PDF", "SaaS", "AWS", "GCP", "SAAS",
     "IPO", "EPS", "ROI", "ROE", "DCF", "TTM", "YTD", "QTD", "MOM",

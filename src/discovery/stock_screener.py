@@ -82,8 +82,8 @@ class StockScreener:
         avg_volume    = 0.0
         latest_price  = 0.0
 
-        # Check 1: Market cap
-        market_cap, cap_ok, cap_reason = self._check_market_cap(tt.ticker)
+        # Check 1: Market cap — also captures sector/name from same Polygon call
+        market_cap, cap_ok, cap_reason, sector, company_name = self._check_market_cap(tt.ticker)
         if not cap_ok:
             fail_reasons.append(cap_reason)
         time.sleep(0.3)
@@ -109,8 +109,8 @@ class StockScreener:
 
         return ScreenedTicker(
             ticker         = tt.ticker,
-            company_name   = tt.company_name,
-            sector         = tt.sector,
+            company_name   = company_name if company_name != "Unknown" else tt.company_name,
+            sector         = sector if sector != "Unknown" else tt.sector,
             market_cap     = market_cap,
             avg_volume_30d = avg_volume,
             latest_price   = latest_price,
@@ -119,29 +119,32 @@ class StockScreener:
             trending_data  = tt,
         )
 
-    def _check_market_cap(self, ticker: str) -> tuple[float, bool, str]:
+    def _check_market_cap(self, ticker: str) -> tuple[float, bool, str, str, str]:
         """
         Check if market cap meets minimum threshold.
+        Also returns sector and company name from the same Polygon call (no extra cost).
 
         Args:
             ticker: Stock symbol.
 
         Returns:
-            (market_cap, passed, reason_string)
+            (market_cap, passed, reason_string, sector, company_name)
         """
         try:
-            details    = self._polygon._client.get_ticker_details(ticker)
-            market_cap = float(getattr(details, "market_cap", 0) or 0)
+            details      = self._polygon._client.get_ticker_details(ticker)
+            market_cap   = float(getattr(details, "market_cap", 0) or 0)
+            sector       = getattr(details, "sic_description", None) or "Unknown"
+            company_name = getattr(details, "name", None) or "Unknown"
             if market_cap >= self._min_market_cap:
-                return (market_cap, True, "")
+                return (market_cap, True, "", sector, company_name)
             return (
-                market_cap,
-                False,
+                market_cap, False,
                 f"Market cap ${market_cap:,.0f} < minimum ${self._min_market_cap:,.0f}",
+                sector, company_name,
             )
         except Exception as e:
             logger.warning(f"[StockScreener] Could not fetch market cap for {ticker}: {e}")
-            return (0.0, False, "Could not fetch market cap")
+            return (0.0, False, "Could not fetch market cap", "Unknown", "Unknown")
 
     def _check_volume(self, ticker: str) -> tuple[float, bool, str]:
         """
