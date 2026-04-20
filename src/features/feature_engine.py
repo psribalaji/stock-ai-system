@@ -73,7 +73,7 @@ class FeatureEngine:
         # Simple MAs
         df["sma_20"]  = ta.sma(df["close"], length=20)
         df["sma_50"]  = ta.sma(df["close"], length=cfg.ma_short)
-        df["sma_200"] = ta.sma(df["close"], length=cfg.ma_long)
+        df["sma_200"] = pd.to_numeric(ta.sma(df["close"], length=cfg.ma_long), errors="coerce")
 
         # Exponential MAs
         df["ema_9"]   = ta.ema(df["close"], length=9)
@@ -84,7 +84,7 @@ class FeatureEngine:
         df["price_vs_sma50"]  = (df["close"] - df["sma_50"])  / df["sma_50"]
         df["price_vs_sma200"] = (df["close"] - df["sma_200"]) / df["sma_200"]
 
-        # Golden cross / death cross
+        # Golden cross / death cross (sma_200 is NaN when history < 200 bars — comparisons return False safely)
         df["golden_cross"] = (
             (df["sma_50"] > df["sma_200"]) &
             (df["sma_50"].shift(1) <= df["sma_200"].shift(1))

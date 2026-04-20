@@ -64,8 +64,8 @@ def render_discovery_page() -> None:
                 df    = store.load_ohlcv(ticker)
                 if df.empty or len(df) < 50:
                     # Discovery candidates won't be in local Parquet — fetch live
-                    df = AlpacaClient().get_recent_bars(ticker, days=60)
-                if df.empty or len(df) < 20:
+                    df = AlpacaClient().get_recent_bars(ticker, days=90)
+                if df.empty or len(df) < 50:
                     return "NO DATA"
                 detector = SignalDetector()
                 signals  = detector.detect_actionable(ticker, df)
