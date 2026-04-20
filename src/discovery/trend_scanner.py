@@ -48,6 +48,9 @@ _REDDIT_BLOCKLIST: set[str] = {
     "CNBC", "MSNBC", "WSJ", "FT", "EUR", "GBP", "JPY", "CNY",
     "NYC", "CEO", "DOJ", "FTC", "CFTC", "FINRA", "PCAOB",
     "LNG", "EPT", "RI", "TV", "HRX", "ET", "HDFC",
+    # File formats / tech abbreviations common on Reddit
+    "CSV", "API", "SQL", "JSON", "XML", "PDF", "SaaS", "AWS", "GCP", "SAAS",
+    "IPO", "EPS", "ROI", "ROE", "DCF", "TTM", "YTD", "QTD", "MOM",
 }
 
 _TICKER_PATTERN     = re.compile(r'\$([A-Z]{1,5})\b')
