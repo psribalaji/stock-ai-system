@@ -63,9 +63,8 @@ def render_risk_page() -> None:
         returns_df = pd.DataFrame(price_data).pct_change().dropna()
         corr = returns_df.corr()
 
-        # Color-code: red = high correlation, green = low
         st.dataframe(
-            corr.style.background_gradient(cmap="RdYlGn_r", vmin=-1, vmax=1).format("{:.2f}"),
+            corr.round(2),
             use_container_width=True,
         )
 
