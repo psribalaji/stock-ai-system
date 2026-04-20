@@ -311,9 +311,10 @@ class TrendScanner:
                 if ticker in _REDDIT_BLOCKLIST:
                     continue
 
-                mentions_now  = int(row.get("mentions", 0))
-                mentions_prev = int(row.get("mentions_24h_ago", 0))
-                upvotes       = int(row.get("upvotes", 0))
+                # Use `or 0` to handle explicit null values from the API
+                mentions_now  = int(row.get("mentions") or 0)
+                mentions_prev = int(row.get("mentions_24h_ago") or 0)
+                upvotes       = int(row.get("upvotes") or 0)
 
                 # Real spike: current 24h mentions vs prior 24h mentions
                 spike = mentions_now / max(1, mentions_prev)
@@ -322,11 +323,15 @@ class TrendScanner:
 
                 # Sentiment: normalise upvote count relative to mentions
                 # (upvotes / max(mentions,1) capped at 1.0, then scaled to [-1, 1])
-                raw_sentiment   = min(upvotes / max(mentions_now, 1), 1.0)
-                avg_sentiment   = round((raw_sentiment * 2) - 1.0, 3)  # [0,1] → [-1,1]
+                raw_sentiment = min(upvotes / max(mentions_now, 1), 1.0)
+                avg_sentiment = round((raw_sentiment * 2) - 1.0, 3)  # [0,1] → [-1,1]
 
-                company_name, sector = self._get_sector_and_name(ticker)
-                price, market_cap    = self._get_price_and_market_cap(ticker)
+                # ApeWisdom provides the company name directly — use it to avoid
+                # a Polygon call per ticker here (screener fetches details anyway)
+                company_name = row.get("name") or "Unknown"
+                sector       = "Unknown"
+                price        = 0.0
+                market_cap   = 0.0
 
                 results.append(TrendingTicker(
                     ticker        = ticker,
