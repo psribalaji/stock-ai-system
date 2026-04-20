@@ -71,7 +71,6 @@ class StockScreener:
         for tt in candidates:
             result = self._screen_one(tt)
             results.append(result)
-            time.sleep(0.25)  # stay within Polygon free tier (~5 req/s limit)
         return results
 
     # ── Private screening methods ─────────────────────────────────────────────
@@ -87,18 +86,21 @@ class StockScreener:
         market_cap, cap_ok, cap_reason = self._check_market_cap(tt.ticker)
         if not cap_ok:
             fail_reasons.append(cap_reason)
+        time.sleep(0.3)
 
         # Check 2: Volume
         avg_volume, vol_ok, vol_reason = self._check_volume(tt.ticker)
         if not vol_ok:
             fail_reasons.append(vol_reason)
+        time.sleep(0.3)
 
         # Check 3: Price
         latest_price, price_ok, price_reason = self._check_price(tt.ticker)
         if not price_ok:
             fail_reasons.append(price_reason)
+        time.sleep(0.3)
 
-        # Check 4: Alpaca tradability
+        # Check 4: Alpaca tradability (no Polygon call — no sleep needed)
         tradeable, trade_reason = self._check_tradeable_on_alpaca(tt.ticker)
         if not tradeable:
             fail_reasons.append(trade_reason)
