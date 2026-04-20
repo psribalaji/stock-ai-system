@@ -210,8 +210,8 @@ def render_discovery_page() -> None:
             with st.spinner("Scanning news..."):
                 news_results   = scanner._scan_news_velocity()
 
-            with st.spinner("Scanning Reddit..."):
-                reddit_results = scanner._scan_reddit()
+            with st.spinner("Scanning Reddit (ApeWisdom)..."):
+                reddit_results = scanner._scan_apewisdom()
 
             # Deduplicate and merge (same logic as scanner.scan())
             with st.spinner("Screening candidates..."):
@@ -236,8 +236,7 @@ def render_discovery_page() -> None:
                 st.warning("News scan: 0 results — Finnhub returned no articles with ticker spikes "
                            "above the 3x threshold, or API returned empty.")
             if len(reddit_results) == 0:
-                st.warning("Reddit scan: 0 results — either REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET "
-                           "/ REDDIT_USER_AGENT are not set in .env, or no tickers had >10 mentions.")
+                st.warning("ApeWisdom scan: 0 results — API may be unreachable or no tickers met the spike threshold.")
 
             if candidates and not passed:
                 # Show why each candidate failed screening
