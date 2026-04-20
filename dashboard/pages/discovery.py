@@ -16,6 +16,110 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _explain_signal(ticker: str) -> dict:
+    """Run full signal pipeline and return explanation data."""
+    try:
+        from src.ingestion.storage import ParquetStore
+        from src.ingestion.alpaca_client import AlpacaClient
+        from src.signals.signal_detector import SignalDetector
+        from src.signals.confidence_scorer import ConfidenceScorer
+        from src.features.feature_engine import FeatureEngine
+        from src.config import get_config
+
+        cfg = get_config()
+        store = ParquetStore(cfg.data.storage_path)
+
+        # Get data
+        df = store.load_ohlcv(ticker)
+        if df.empty or len(df) < 50:
+            df = AlpacaClient().get_recent_bars(ticker, days=90)
+        if df.empty or len(df) < 50:
+            return {"error": f"Not enough data ({len(df)} bars, need 50+)"}
+
+        # Compute features
+        engine = FeatureEngine()
+        df_feat = engine.compute_all(df, ticker)
+        features = engine.get_latest_features(df_feat)
+
+        # Run strategies
+        detector = SignalDetector()
+        signals = detector.detect(ticker, df_feat)
+
+        # Score actionable signals
+        scorer = ConfidenceScorer()
+        actionable = [s for s in signals if s.direction != "HOLD"]
+        scored = scorer.score_all(actionable, ticker) if actionable else []
+
+        return {
+            "features": features,
+            "signals": signals,
+            "scored": scored,
+            "bars": len(df),
+            "price": float(df_feat["close"].iloc[-1]),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _render_signal_explanation(ticker: str) -> None:
+    """Render the explain section for a ticker."""
+    data = _explain_signal(ticker)
+
+    if "error" in data:
+        st.warning(f"Cannot explain: {data['error']}")
+        return
+
+    features = data["features"]
+    signals = data["signals"]
+    scored = data["scored"]
+    price = data["price"]
+
+    # ── Step 1: Key features
+    st.markdown(f"**Step 1: Features** (price: ${price:.2f}, {data['bars']} bars)")
+    feat_cols = st.columns(4)
+    feat_cols[0].metric("RSI(14)", f"{features.get('rsi_14', 0):.1f}")
+    feat_cols[1].metric("ADX", f"{features.get('adx', 0):.1f}")
+    feat_cols[2].metric("Vol Ratio", f"{features.get('vol_ratio', 0):.2f}x")
+    feat_cols[3].metric("MA Alignment", f"{features.get('ma_alignment', 0):.0f}/3")
+
+    feat_cols2 = st.columns(4)
+    feat_cols2[0].metric("Bull Regime", "Yes" if features.get("bull_regime") else "No")
+    feat_cols2[1].metric("High Volume", "Yes" if features.get("high_volume") else "No")
+    feat_cols2[2].metric("BB Position", f"{features.get('bb_pct', 0):.2f}")
+    feat_cols2[3].metric("5d Return", f"{features.get('return_5d', 0):.1%}")
+
+    # ── Step 2: Strategy decisions
+    st.markdown("**Step 2: Strategy Decisions**")
+    for s in signals:
+        icon = "🟢" if s.direction == "BUY" else "🔴" if s.direction == "SELL" else "⚪"
+        st.write(f"{icon} **{s.strategy}** → {s.direction} | {s.reason}")
+
+    # ── Step 3: Confidence scoring
+    if scored:
+        st.markdown("**Step 3: Confidence Scoring**")
+        for s in scored:
+            base = s.base_confidence
+            regime = s.regime_multiplier
+            vol = s.volume_multiplier
+            sent = s.sentiment_multiplier
+            final = s.confidence
+            blocked = "🚫 BLOCKED" if s.blocked else "✅ APPROVED"
+
+            st.code(
+                f"{s.strategy} ({s.pattern}):\n"
+                f"  {base:.3f} (base win rate)\n"
+                f"  × {regime:.2f} ({'bull regime' if regime == 1.0 else 'bear/high-vol regime'})\n"
+                f"  × {vol:.2f} ({'high volume' if vol > 1.0 else 'low volume'})\n"
+                f"  × {sent:.2f} (sentiment)\n"
+                f"  = {final:.3f} → {blocked} (threshold: 0.60)",
+                language=None,
+            )
+    else:
+        st.markdown("**Step 3: Confidence Scoring**")
+        st.write("No actionable signals to score — all strategies returned HOLD.")
+
+
 def render_discovery_page() -> None:
     """
     Render the Dynamic Universe Discovery dashboard page.
@@ -152,6 +256,10 @@ def render_discovery_page() -> None:
                     manager.ignore(ticker)
                     st.toast(f"{ticker} ignored.", icon="✗")
                     st.rerun()
+
+            # ── Explain section ───────────────────────────────────────
+            with st.expander(f"🔍 Explain {ticker} signal", expanded=False):
+                _render_signal_explanation(ticker)
 
     st.divider()
 
