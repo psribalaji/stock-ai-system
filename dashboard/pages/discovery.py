@@ -59,9 +59,8 @@ def _explain_signal(ticker: str) -> dict:
             "price": float(df_feat["close"].iloc[-1]),
         }
     except Exception as e:
-        import traceback
-        import streamlit as st
-        st.error(traceback.format_exc())
+        from loguru import logger
+        logger.error(f"[Discovery] _explain_signal failed for {ticker}: {e}")
         return {"error": str(e)}
 
 
