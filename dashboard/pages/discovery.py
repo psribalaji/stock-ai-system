@@ -59,6 +59,9 @@ def _explain_signal(ticker: str) -> dict:
             "price": float(df_feat["close"].iloc[-1]),
         }
     except Exception as e:
+        import traceback
+        import streamlit as st
+        st.error(traceback.format_exc())
         return {"error": str(e)}
 
 
