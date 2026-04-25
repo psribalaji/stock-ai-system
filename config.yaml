@@ -118,7 +118,7 @@ data:
   storage_path:        "./data"
   s3_bucket:           "stock-ai-system-data"   # Your S3 bucket name
   s3_prefix:           "market-data"
-  sync_to_s3:          false   # Set true in Phase 3
+  sync_to_s3:          true
   polygon_timeframe:   "day"   # day | hour | minute
   alpaca_feed:         "iex"   # iex (free) | sip (paid)
 

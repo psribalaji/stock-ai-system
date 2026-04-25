@@ -105,3 +105,8 @@ class Secrets:
     @staticmethod
     def anthropic_api_key() -> str:
         return get_secret("ANTHROPIC_API_KEY", "stock-ai/anthropic-api-key")
+
+    @staticmethod
+    def aws_role_arn() -> str:
+        """Optional — only needed when assuming a role locally."""
+        return os.environ.get("AWS_ROLE_ARN", "")

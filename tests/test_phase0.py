@@ -25,7 +25,7 @@ from src.config import get_config
 @pytest.fixture
 def tmp_store(tmp_path):
     """ParquetStore backed by a temp directory — no real files touched."""
-    return ParquetStore(base_path=str(tmp_path))
+    return ParquetStore(base_path=str(tmp_path), sync_to_s3=False)
 
 
 @pytest.fixture

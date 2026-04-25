@@ -83,6 +83,7 @@ class DataConfig(BaseModel):
     s3_bucket: str = "stock-ai-system-data"
     s3_prefix: str = "market-data"
     sync_to_s3: bool = False
+    s3_role_arn: str = ""
     polygon_timeframe: str = "day"
     alpaca_feed: str = "iex"
 

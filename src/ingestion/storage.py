@@ -15,22 +15,115 @@ from loguru import logger
 
 class ParquetStore:
     """
-    Handles all local Parquet storage.
+    Handles all Parquet storage — local disk with optional S3 sync.
+
+    When sync_to_s3=True (set in config.yaml):
+      - Every save uploads to S3 after writing locally
+      - Every load pulls from S3 if the local file is missing
+
     Directory structure:
       data/
-        raw/       TICKER_YEAR.parquet  — OHLCV price data
-        signals/   YYYY-MM-DD.parquet  — Daily signals
+        raw/       TICKER.parquet        — OHLCV price data
+        signals/   YYYY-MM-DD.parquet   — Daily signals
         news/      TICKER_YYYY-MM.parquet — News cache
-        audit/     YYYY-MM.parquet     — Trade audit log
+        audit/     YYYY-MM.parquet      — Trade audit log
     """
 
-    def __init__(self, base_path: str = "./data"):
+    def __init__(self, base_path: str = "./data", sync_to_s3: bool | None = None):
         self.base = Path(base_path)
         self._init_dirs()
 
+        from src.config import get_config
+        cfg = get_config()
+        # sync_to_s3 param overrides config — used by tests to disable S3
+        self._sync   = cfg.data.sync_to_s3 if sync_to_s3 is None else sync_to_s3
+        self._bucket = cfg.data.s3_bucket
+        self._prefix = cfg.data.s3_prefix.rstrip("/")
+        self._s3 = None  # lazy — created on first use
+
     def _init_dirs(self) -> None:
-        for subdir in ["raw", "signals", "news", "audit"]:
+        for subdir in ["raw", "signals", "news", "audit", "discovery"]:
             (self.base / subdir).mkdir(parents=True, exist_ok=True)
+
+    # ── S3 helpers ────────────────────────────────────────────────
+
+    def _get_s3(self):
+        """Return a boto3 S3 client, assuming role if AWS_ROLE_ARN is set."""
+        if self._s3 is not None:
+            return self._s3
+        try:
+            import boto3
+            from src.secrets import Secrets
+            role_arn = Secrets.aws_role_arn()
+            if role_arn:
+                # Local dev: assume role via STS
+                sts = boto3.client("sts")
+                creds = sts.assume_role(
+                    RoleArn=role_arn,
+                    RoleSessionName="stockai-parquet-store",
+                )["Credentials"]
+                self._s3 = boto3.client(
+                    "s3",
+                    aws_access_key_id=creds["AccessKeyId"],
+                    aws_secret_access_key=creds["SecretAccessKey"],
+                    aws_session_token=creds["SessionToken"],
+                )
+            else:
+                # EC2 / Lightsail / Streamlit Cloud: use attached role or env creds
+                self._s3 = boto3.client("s3")
+            return self._s3
+        except Exception as e:
+            logger.error(f"[S3] Failed to create S3 client: {e}")
+            raise
+
+    def _s3_key(self, local_path: Path) -> str:
+        """Convert a local path to an S3 key."""
+        rel = local_path.relative_to(self.base)
+        return f"{self._prefix}/{rel}"
+
+    def _s3_upload(self, local_path: Path) -> None:
+        """Upload a local file to S3. Silently skips if sync disabled."""
+        if not self._sync:
+            return
+        try:
+            key = self._s3_key(local_path)
+            self._get_s3().upload_file(str(local_path), self._bucket, key)
+            logger.debug(f"[S3] Uploaded → s3://{self._bucket}/{key}")
+        except Exception as e:
+            logger.warning(f"[S3] Upload failed for {local_path.name}: {e}")
+
+    def _s3_download(self, local_path: Path) -> None:
+        """Download a single file from S3 if missing locally."""
+        if not self._sync or local_path.exists():
+            return
+        try:
+            key = self._s3_key(local_path)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            self._get_s3().download_file(self._bucket, key, str(local_path))
+            logger.debug(f"[S3] Downloaded ← s3://{self._bucket}/{key}")
+        except Exception as e:
+            logger.debug(f"[S3] Not found in S3 or download failed for {local_path.name}: {e}")
+
+    def _s3_sync_dir(self, subdir: str) -> None:
+        """Download any files in an S3 prefix that are missing locally."""
+        if not self._sync:
+            return
+        try:
+            s3_prefix = f"{self._prefix}/{subdir}/"
+            paginator = self._get_s3().get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self._bucket, Prefix=s3_prefix):
+                for obj in page.get("Contents", []):
+                    key = obj["Key"]
+                    filename = key.split("/")[-1]
+                    if not filename.endswith(".parquet"):
+                        continue
+                    local_path = self.base / subdir / filename
+                    if not local_path.exists():
+                        local_path.parent.mkdir(parents=True, exist_ok=True)
+                        self._get_s3().download_file(self._bucket, key, str(local_path))
+                        logger.debug(f"[S3] Downloaded ← s3://{self._bucket}/{key}")
+        except Exception as e:
+            logger.debug(f"[S3] Dir sync failed for {subdir}: {e}")
 
     # ── OHLCV ────────────────────────────────────────────────────
 
@@ -56,6 +149,7 @@ class ParquetStore:
 
         combined.to_parquet(path, engine="pyarrow", compression="snappy", index=False)
         logger.info(f"Saved {len(combined)} rows for {ticker} → {path}")
+        self._s3_upload(path)
         return path
 
     def load_ohlcv(
@@ -66,6 +160,7 @@ class ParquetStore:
     ) -> pd.DataFrame:
         """Load OHLCV for a ticker with optional date range filter."""
         path = self.base / "raw" / f"{ticker}.parquet"
+        self._s3_download(path)
         if not path.exists():
             logger.warning(f"No OHLCV data found for {ticker}")
             return pd.DataFrame()
@@ -103,6 +198,7 @@ class ParquetStore:
         path = self.base / "signals" / f"{d.isoformat()}.parquet"
         df.to_parquet(path, engine="pyarrow", compression="snappy", index=False)
         logger.info(f"Saved {len(df)} signals → {path}")
+        self._s3_upload(path)
         return path
 
     def load_signals(
@@ -112,6 +208,7 @@ class ParquetStore:
     ) -> pd.DataFrame:
         """Load all signals across a date range."""
         sig_dir = self.base / "signals"
+        self._s3_sync_dir("signals")
         files = sorted(sig_dir.glob("*.parquet"))
         if not files:
             return pd.DataFrame()
@@ -141,11 +238,13 @@ class ParquetStore:
             existing = pd.read_parquet(path)
             df = pd.concat([existing, df]).drop_duplicates(subset=["id"])
         df.to_parquet(path, engine="pyarrow", compression="snappy", index=False)
+        self._s3_upload(path)
         return path
 
     def load_news(self, ticker: str, days_back: int = 7) -> pd.DataFrame:
         """Load recent news for a ticker."""
         news_dir = self.base / "news"
+        self._s3_sync_dir("news")
         files = sorted(news_dir.glob(f"{ticker}_*.parquet"))
         if not files:
             return pd.DataFrame()
@@ -171,6 +270,7 @@ class ParquetStore:
             df = pd.concat([existing, df]).drop_duplicates(subset=["trade_id"])
         df.to_parquet(path, engine="pyarrow", compression="snappy", index=False)
         logger.info(f"Audit log updated → {path}")
+        self._s3_upload(path)
         return path
 
     def load_audit(
@@ -180,6 +280,7 @@ class ParquetStore:
     ) -> pd.DataFrame:
         """Load audit log across months."""
         audit_dir = self.base / "audit"
+        self._s3_sync_dir("audit")
         files = sorted(audit_dir.glob("*.parquet"))
         if not files:
             return pd.DataFrame()
