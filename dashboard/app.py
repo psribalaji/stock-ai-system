@@ -577,7 +577,8 @@ def page_live_trading() -> None:
 
     try:
         from src.ingestion.alpaca_client import AlpacaClient
-        trader = LiveTrader(alpaca_client=AlpacaClient())
+        from src.storage.s3_sync import S3Sync
+        trader = LiveTrader(alpaca_client=AlpacaClient(), s3_sync=S3Sync())
     except Exception:
         trader = LiveTrader()
 
