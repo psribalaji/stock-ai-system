@@ -88,6 +88,14 @@ class S3Sync:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
+    def validate_connection(self) -> bool:
+        """Return True if the S3 bucket is reachable and accessible."""
+        try:
+            self._get_s3().head_bucket(Bucket=self.bucket)
+            return True
+        except Exception:
+            return False
+
     def sync(self) -> SyncResult:
         """
         Sync all Parquet files under local_path to S3.
