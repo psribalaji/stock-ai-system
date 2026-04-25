@@ -46,10 +46,11 @@ class UniverseManager:
     via the dashboard before any ticker enters the trading pipeline.
     """
 
-    def __init__(self, base_path: str = "./data") -> None:
+    def __init__(self, base_path: str = "./data", sync_to_s3: bool | None = None) -> None:
         self.config = get_config()
         self.watchlist_path = Path(base_path) / "discovery" / "watchlist.parquet"
         self.watchlist_path.parent.mkdir(parents=True, exist_ok=True)
+        self._sync = self.config.data.sync_to_s3 if sync_to_s3 is None else sync_to_s3
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -260,13 +261,15 @@ class UniverseManager:
     # ── Internal I/O ──────────────────────────────────────────────────────────
 
     def _load(self) -> pd.DataFrame:
-        """Load watchlist.parquet or return empty DataFrame with correct schema."""
+        """Load watchlist.parquet — pulls from S3 if missing locally."""
+        if not self.watchlist_path.exists():
+            self._s3_download()
+
         if not self.watchlist_path.exists():
             return _empty_df()
 
         try:
             df = pd.read_parquet(self.watchlist_path, engine="pyarrow")
-            # Ensure all schema columns exist
             for col in _SCHEMA_COLS:
                 if col not in df.columns:
                     df[col] = None
@@ -276,9 +279,8 @@ class UniverseManager:
             return _empty_df()
 
     def _save(self, df: pd.DataFrame) -> None:
-        """Save DataFrame to watchlist.parquet."""
+        """Save watchlist.parquet locally and upload to S3."""
         try:
-            # Ensure the directory exists
             self.watchlist_path.parent.mkdir(parents=True, exist_ok=True)
             df.to_parquet(
                 self.watchlist_path,
@@ -287,5 +289,28 @@ class UniverseManager:
                 index=False,
             )
             logger.debug(f"[UniverseManager] Saved watchlist ({len(df)} rows) → {self.watchlist_path}")
+            self._s3_upload()
         except Exception as e:
             logger.error(f"[UniverseManager] Failed to save watchlist: {e}")
+
+    def _s3_upload(self) -> None:
+        """Upload watchlist to S3 if sync is enabled."""
+        if not self._sync:
+            return
+        try:
+            from src.ingestion.storage import ParquetStore
+            store = ParquetStore(str(self.watchlist_path.parent.parent))
+            store._s3_upload(self.watchlist_path)
+        except Exception as e:
+            logger.debug(f"[UniverseManager] S3 upload skipped: {e}")
+
+    def _s3_download(self) -> None:
+        """Download watchlist from S3 if missing locally."""
+        if not self._sync:
+            return
+        try:
+            from src.ingestion.storage import ParquetStore
+            store = ParquetStore(str(self.watchlist_path.parent.parent))
+            store._s3_download(self.watchlist_path)
+        except Exception as e:
+            logger.debug(f"[UniverseManager] S3 download skipped: {e}")

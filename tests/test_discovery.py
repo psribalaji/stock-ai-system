@@ -291,7 +291,7 @@ class TestUniverseManager:
         """add_candidates() should persist passed tickers to parquet."""
         from src.discovery.universe_manager import UniverseManager
 
-        manager   = UniverseManager(base_path=str(tmp_path))
+        manager   = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         screened  = [_make_screened("ZXYZ", passed=True)]
         added     = manager.add_candidates(screened)
 
@@ -305,7 +305,7 @@ class TestUniverseManager:
         """Adding the same ticker twice should only count it once."""
         from src.discovery.universe_manager import UniverseManager
 
-        manager  = UniverseManager(base_path=str(tmp_path))
+        manager  = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         screened = [_make_screened("ZXYZ", passed=True)]
 
         first  = manager.add_candidates(screened)
@@ -321,7 +321,7 @@ class TestUniverseManager:
         """Tickers that failed screening should not be added."""
         from src.discovery.universe_manager import UniverseManager
 
-        manager  = UniverseManager(base_path=str(tmp_path))
+        manager  = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         screened = [_make_screened("FAIL", passed=False)]
         added    = manager.add_candidates(screened)
 
@@ -331,7 +331,7 @@ class TestUniverseManager:
         """approve() should set status to APPROVED and set approved_at."""
         from src.discovery.universe_manager import UniverseManager, STATUS_APPROVED
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         manager.add_candidates([_make_screened("ZXYZ")])
 
         result = manager.approve("ZXYZ")
@@ -346,7 +346,7 @@ class TestUniverseManager:
         """approve() should return False when ticker is not in watchlist."""
         from src.discovery.universe_manager import UniverseManager
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         result  = manager.approve("NOTEXIST")
         assert result is False
 
@@ -354,7 +354,7 @@ class TestUniverseManager:
         """ignore() should set status to IGNORED."""
         from src.discovery.universe_manager import UniverseManager, STATUS_IGNORED
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         manager.add_candidates([_make_screened("ZXYZ")])
 
         result = manager.ignore("ZXYZ")
@@ -369,7 +369,7 @@ class TestUniverseManager:
         import pyarrow as pa
         import pyarrow.parquet as pq
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
 
         # Add a candidate, then manually backdate its added_at
         manager.add_candidates([_make_screened("OLD01")])
@@ -389,7 +389,7 @@ class TestUniverseManager:
         """expire_old() should not expire recently added candidates."""
         from src.discovery.universe_manager import UniverseManager, STATUS_CANDIDATE
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         manager.add_candidates([_make_screened("NEW01")])
 
         expired = manager.expire_old(days=14)
@@ -403,7 +403,7 @@ class TestUniverseManager:
         from src.discovery.universe_manager import UniverseManager
         from src.config import get_config
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         manager.add_candidates([_make_screened("ZXYZ")])
         manager.approve("ZXYZ")
 
@@ -419,7 +419,7 @@ class TestUniverseManager:
         """get_watchlist() should return empty DataFrame when no file exists."""
         from src.discovery.universe_manager import UniverseManager
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         df = manager.get_watchlist()
 
         assert isinstance(df, pd.DataFrame)
@@ -429,7 +429,7 @@ class TestUniverseManager:
         """get_stats() should return a dict with the required keys."""
         from src.discovery.universe_manager import UniverseManager
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
 
         stats = manager.get_stats()
         required_keys = {"total", "candidate", "watchlist", "approved", "ignored", "expired", "approval_rate"}
@@ -439,7 +439,7 @@ class TestUniverseManager:
         """get_stats() should count statuses correctly."""
         from src.discovery.universe_manager import UniverseManager
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
 
         # Add 2 candidates, approve 1, ignore 1
         manager.add_candidates([_make_screened("AAA"), _make_screened("BBB")])
@@ -457,7 +457,7 @@ class TestUniverseManager:
         """get_watchlist(status_filter=...) should only return rows of that status."""
         from src.discovery.universe_manager import UniverseManager, STATUS_CANDIDATE, STATUS_APPROVED
 
-        manager = UniverseManager(base_path=str(tmp_path))
+        manager = UniverseManager(base_path=str(tmp_path), sync_to_s3=False)
         manager.add_candidates([_make_screened("AAA"), _make_screened("BBB")])
         manager.approve("AAA")
 
