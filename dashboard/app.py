@@ -866,34 +866,34 @@ def main() -> None:
     page = _sidebar()
 
     if page == "How It Works":
-        from dashboard.pages.onboarding import render_onboarding_page
+        from dashboard.views.onboarding import render_onboarding_page
         render_onboarding_page()
     elif page == "Signals Today":
         page_signals()
     elif page == "Discovery":
-        from dashboard.pages.discovery import render_discovery_page
+        from dashboard.views.discovery import render_discovery_page
         render_discovery_page()
     elif page == "Portfolio":
         page_portfolio()
     elif page == "Monitor":
         page_monitor()
     elif page == "Risk":
-        from dashboard.pages.risk import render_risk_page
+        from dashboard.views.risk import render_risk_page
         render_risk_page()
     elif page == "Strategy Performance":
-        from dashboard.pages.strategy_performance import render_strategy_performance_page
+        from dashboard.views.strategy_performance import render_strategy_performance_page
         render_strategy_performance_page()
     elif page == "Stops & TPs":
-        from dashboard.pages.stops_tp import render_stops_tp_page
+        from dashboard.views.stops_tp import render_stops_tp_page
         render_stops_tp_page()
     elif page == "Sentiment":
-        from dashboard.pages.sentiment import render_sentiment_page
+        from dashboard.views.sentiment import render_sentiment_page
         render_sentiment_page()
     elif page == "ML Ensemble":
-        from dashboard.pages.ml_ensemble_status import render_ml_ensemble_page
+        from dashboard.views.ml_ensemble_status import render_ml_ensemble_page
         render_ml_ensemble_page()
     elif page == "Config Editor":
-        from dashboard.pages.config_editor import render_config_editor_page
+        from dashboard.views.config_editor import render_config_editor_page
         render_config_editor_page()
     elif page == "Audit Log":
         page_audit()
