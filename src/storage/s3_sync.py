@@ -83,8 +83,8 @@ class S3Sync:
 
         # Load .env explicitly so AWS_REGION is available
         import os
-        from src.secrets import Secrets
-        Secrets._load_dotenv()
+        from src.secrets import _load_dotenv
+        _load_dotenv()
         self._region = os.environ.get("AWS_REGION", "us-east-1")
 
         logger.info(
