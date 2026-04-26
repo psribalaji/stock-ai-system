@@ -91,6 +91,11 @@ class ParquetStore:
             logger.debug(f"[S3] Uploaded → s3://{self._bucket}/{key}")
         except Exception as e:
             logger.warning(f"[S3] Upload failed for {local_path.name}: {e}")
+            try:
+                from src.notifications import notify
+                notify(f"S3 upload failed: {local_path.name} — {e}", level="warning")
+            except Exception:
+                pass
 
     def _s3_download(self, local_path: Path) -> None:
         """Download a single file from S3 if missing locally."""

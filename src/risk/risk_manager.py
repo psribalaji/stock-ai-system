@@ -113,6 +113,12 @@ class RiskManager:
                 f"[RiskManager] KILL SWITCH: drawdown={drawdown:.2%} >= {cfg.max_drawdown_pct:.2%}. "
                 f"All positions should be closed."
             )
+            try:
+                from src.notifications import notify
+                notify(f"KILL SWITCH: drawdown {drawdown:.2%} — all positions should be closed",
+                       level="critical")
+            except Exception:
+                pass
             return self._block(
                 f"Kill switch triggered: drawdown {drawdown:.2%} >= limit {cfg.max_drawdown_pct:.2%}"
             )
@@ -127,6 +133,12 @@ class RiskManager:
                 f"[RiskManager] CIRCUIT BREAKER: daily P&L={portfolio.daily_pnl_pct:.2%}. "
                 f"Trading paused for the day."
             )
+            try:
+                from src.notifications import notify
+                notify(f"Circuit breaker: daily P&L {portfolio.daily_pnl_pct:.2%} — trading paused",
+                       level="critical")
+            except Exception:
+                pass
             return self._block(
                 f"Circuit breaker: daily P&L {portfolio.daily_pnl_pct:.2%} "
                 f"<= -{cfg.daily_loss_limit:.2%}"

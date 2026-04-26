@@ -236,6 +236,8 @@ class TradingScheduler:
         ))
 
         # OHLCV sync
+        synced_count = 0
+        failed_tickers = []
         try:
             from src.ingestion.market_data_service import MarketDataService
             svc = MarketDataService()
@@ -244,11 +246,29 @@ class TradingScheduler:
                     df = svc.get_latest_bars(ticker)
                     if not df.empty:
                         self.store.save_ohlcv(ticker, df)
+                        synced_count += 1
                         logger.debug(f"[Scheduler] Synced {ticker}: {len(df)} bars")
                 except Exception as exc:
+                    failed_tickers.append(ticker)
                     logger.error(f"[Scheduler] data_sync failed for {ticker}: {exc}")
         except Exception as exc:
             logger.error(f"[Scheduler] data_sync job failed: {exc}")
+            try:
+                from src.notifications import notify
+                notify(f"Data sync crashed: {exc}", level="critical")
+            except Exception:
+                pass
+
+        # Notify sync results
+        try:
+            from src.notifications import notify
+            if failed_tickers:
+                notify(f"Daily sync: {synced_count} tickers OK, {len(failed_tickers)} failed ({', '.join(failed_tickers[:5])})",
+                       level="warning")
+            elif synced_count > 0:
+                notify(f"Daily sync complete: {synced_count} tickers updated", level="info")
+        except Exception:
+            pass
 
         # News sync (Finnhub — runs after OHLCV, failures don't block pipeline)
         try:
@@ -331,6 +351,11 @@ class TradingScheduler:
 
         except Exception as exc:
             logger.error(f"[Scheduler] signal_pipeline failed: {exc}")
+            try:
+                from src.notifications import notify
+                notify(f"Signal pipeline crashed: {exc}", level="critical")
+            except Exception:
+                pass
 
     def job_position_check(self) -> None:
         """
