@@ -81,6 +81,12 @@ class S3Sync:
         self.local_path = Path(local_path or self.config.data.storage_path)
         self._s3        = None   # lazy-init boto3 client
 
+        # Load .env explicitly so AWS_REGION is available
+        import os
+        from src.secrets import Secrets
+        Secrets._load_dotenv()
+        self._region = os.environ.get("AWS_REGION", "us-east-1")
+
         logger.info(
             f"[S3Sync] Initialised — "
             f"local: {self.local_path} → s3://{self.bucket}/{self.prefix}"
@@ -256,8 +262,8 @@ class S3Sync:
         """Lazy-init boto3 S3 client."""
         if self._s3 is None:
             try:
-                import boto3, os
-                self._s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
+                import boto3
+                self._s3 = boto3.client("s3", region_name=self._region)
             except ImportError:
                 raise ImportError(
                     "boto3 not installed. Run: pip install boto3"
