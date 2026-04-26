@@ -256,8 +256,8 @@ class S3Sync:
         """Lazy-init boto3 S3 client."""
         if self._s3 is None:
             try:
-                import boto3
-                self._s3 = boto3.client("s3", region_name="us-east-1")
+                import boto3, os
+                self._s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "us-east-1"))
             except ImportError:
                 raise ImportError(
                     "boto3 not installed. Run: pip install boto3"

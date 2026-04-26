@@ -37,7 +37,7 @@ def _fetch_from_aws(secret_name: str) -> str:
     """Fetch a secret from AWS Secrets Manager."""
     try:
         import boto3
-        client = boto3.client("secretsmanager", region_name="us-east-1")
+        client = boto3.client("secretsmanager", region_name=os.environ.get("AWS_REGION", "us-east-1"))
         response = client.get_secret_value(SecretId=secret_name)
         value = response["SecretString"]
         # Handle JSON secrets (key-value pairs stored as JSON string)
