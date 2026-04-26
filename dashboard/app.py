@@ -364,7 +364,55 @@ def page_portfolio() -> None:
 
         st.dataframe(display_pos.reset_index(drop=True), use_container_width=True)
 
-        # Mini bar chart — P&L per ticker
+        # ── Per-position details with stops, TPs, and charts
+        st.subheader("Position Details")
+        st.caption("Click a position to see trailing stop, take-profit, and price chart.")
+        for _, p in pos.iterrows():
+            ticker = p["ticker"]
+            pnl = p.get("unrealized_pl", 0)
+            pnl_icon = "🟢" if pnl >= 0 else "🔴"
+            pnl_str = f"${pnl:+,.2f}" if pd.notna(pnl) else "—"
+
+            with st.expander(f"{pnl_icon} **{ticker}** — {pnl_str} P&L", expanded=False):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Shares", p.get("qty", "—"))
+                c2.metric("Avg Entry", f"${p.get('avg_entry_price', 0):,.2f}")
+                c3.metric("Current", f"${p.get('current_price', 0):,.2f}")
+                c4.metric("P&L", pnl_str,
+                          help="Unrealized profit/loss on this position")
+
+                # Show trailing stop / take-profit if available
+                try:
+                    from src.execution.order_executor import OrderExecutor
+                    executor = OrderExecutor(dry_run=True)
+                    ts = executor.get_trailing_stop(ticker)
+                    tp = executor.get_take_profit(ticker)
+                    s1, s2, s3 = st.columns(3)
+                    if ts:
+                        s1.metric("Trailing Stop", f"${ts['stop_price']:,.2f}",
+                                  help="Sells if price drops to this level. Trails up with price.")
+                        s2.metric("High Water", f"${ts['high_water']:,.2f}",
+                                  help="Highest price since entry — stop trails from here")
+                    else:
+                        s1.metric("Trailing Stop", "Not tracked",
+                                  help="Trailing stop is registered when scheduler is running")
+                    if tp:
+                        s3.metric("Take-Profit", f"${tp:,.2f}",
+                                  help="Auto-sells when price reaches this target")
+                    else:
+                        s3.metric("Take-Profit", "Not set")
+                except Exception:
+                    pass
+
+                # Price chart
+                try:
+                    from dashboard.widgets.price_chart import render_price_chart
+                    render_price_chart(ticker, period="1mo", show_controls=False,
+                                       height=280, key_prefix=f"port_{ticker}_")
+                except Exception:
+                    pass
+
+        # P&L bar chart
         if "unrealized_pl" in pos.columns:
             import plotly.graph_objects as go
             colors = ["green" if v >= 0 else "red" for v in pos["unrealized_pl"]]
@@ -384,6 +432,38 @@ def page_portfolio() -> None:
             st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No open positions.")
+
+    st.divider()
+
+    # ── Risk Exposure Summary ──────────────────────────────────────
+    st.subheader("Risk Exposure")
+    from src.config import get_config
+    cfg = get_config()
+
+    if positions is not None and not positions.empty and acct:
+        total_value = acct["portfolio_value"]
+        num_positions = len(positions)
+        max_positions = cfg.risk.max_open_positions
+
+        # Position count
+        r1, r2, r3 = st.columns(3)
+        r1.metric(f"Open Positions", f"{num_positions} / {max_positions}",
+                  help=f"Using {num_positions} of {max_positions} allowed slots")
+
+        # Largest position %
+        if "market_value" in positions.columns and total_value > 0:
+            largest_pct = positions["market_value"].max() / total_value
+            r2.metric("Largest Position", f"{largest_pct:.1%}",
+                      delta=f"{'⚠️ Near limit' if largest_pct > cfg.risk.max_position_pct * 0.8 else '✅ OK'}",
+                      help=f"Limit: {cfg.risk.max_position_pct:.0%}")
+
+        # Portfolio concentration
+        if "market_value" in positions.columns and total_value > 0:
+            invested_pct = positions["market_value"].sum() / total_value
+            r3.metric("Total Invested", f"{invested_pct:.1%}",
+                      help="Percentage of portfolio in open positions vs cash")
+    else:
+        st.info("No positions — 100% cash.")
 
     st.divider()
 
