@@ -27,7 +27,7 @@ echo ""
 # ── 1. System packages ────────────────────────────────────────────────────────
 echo "[1/6] Installing system packages..."
 sudo apt-get update -qq
-sudo apt-get install -y -qq python3.11 python3.11-venv python3.11-dev git build-essential
+sudo apt-get install -y -qq python3.12 python3.12-venv python3.12-dev git build-essential
 
 # ── 2. Clone repo ─────────────────────────────────────────────────────────────
 echo ""
@@ -58,7 +58,7 @@ chmod 600 ~/.git-credentials
 # ── 3. Python venv + dependencies ────────────────────────────────────────────
 echo ""
 echo "[3/6] Creating virtual environment and installing dependencies..."
-python3.11 -m venv .venv
+python3.12 -m venv .venv
 source .venv/bin/activate
 pip install --upgrade pip -q
 pip install -r requirements.txt -q
