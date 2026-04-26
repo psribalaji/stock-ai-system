@@ -101,7 +101,8 @@ def _sidebar() -> str:
         "Navigate",
         ["Signals Today", "Discovery", "Portfolio", "Monitor",
          "Risk", "Strategy Performance", "Stops & TPs",
-         "Sentiment", "ML Ensemble", "Audit Log", "Live Trading"],
+         "Sentiment", "ML Ensemble", "Config Editor",
+         "Audit Log", "Live Trading"],
         index=0,
     )
 
@@ -714,6 +715,9 @@ def main() -> None:
     elif page == "ML Ensemble":
         from dashboard.pages.ml_ensemble_status import render_ml_ensemble_page
         render_ml_ensemble_page()
+    elif page == "Config Editor":
+        from dashboard.pages.config_editor import render_config_editor_page
+        render_config_editor_page()
     elif page == "Audit Log":
         page_audit()
     elif page == "Live Trading":
