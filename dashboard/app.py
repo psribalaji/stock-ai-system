@@ -34,6 +34,13 @@ _ROOT = Path(__file__).parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+# ── Auto-refresh: reload page every 60 seconds ───────────────────────────────
+try:
+    from streamlit_autorefresh import st_autorefresh
+    st_autorefresh(interval=60_000, limit=None, key="global_autorefresh")
+except ImportError:
+    pass  # graceful fallback if package not installed
+
 from src.config import get_config, reload_config
 from src.live.live_trader import LiveTrader
 from src.ingestion.storage import ParquetStore
