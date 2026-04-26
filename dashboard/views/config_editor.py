@@ -189,6 +189,44 @@ def render_config_editor_page() -> None:
 
     st.divider()
 
+    # ── Strategy Toggles ──────────────────────────────────────────
+    st.subheader("Strategy Toggles")
+    st.caption("Disable individual strategies without stopping the whole system.")
+
+    _STRATEGIES_FILE = Path(get_config().data.storage_path) / "disabled_strategies.json"
+
+    import json
+    disabled = set()
+    if _STRATEGIES_FILE.exists():
+        disabled = set(json.loads(_STRATEGIES_FILE.read_text()))
+
+    all_strategies = ["momentum", "trend_following", "volatility_breakout", "mean_reversion"]
+    if cfg.ml_ensemble.enabled:
+        all_strategies.append("ml_ensemble")
+
+    cols = st.columns(len(all_strategies))
+    strategy_changes = False
+    for i, strat in enumerate(all_strategies):
+        with cols[i]:
+            enabled = strat not in disabled
+            new_val = st.toggle(strat.replace("_", " ").title(), value=enabled, key=f"strat_{strat}",
+                                help=f"{'Active' if enabled else 'Disabled'} — "
+                                     f"{'disable to stop this strategy from generating signals' if enabled else 'enable to resume signal generation'}")
+            if new_val != enabled:
+                strategy_changes = True
+                if new_val:
+                    disabled.discard(strat)
+                else:
+                    disabled.add(strat)
+
+    if strategy_changes:
+        if st.button("💾 Save Strategy Toggles"):
+            _STRATEGIES_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _STRATEGIES_FILE.write_text(json.dumps(list(disabled)))
+            st.success(f"Saved! Disabled strategies: {list(disabled) or 'none'}")
+
+    st.divider()
+
     # ── Changes summary + Save ────────────────────────────────────
     if changes:
         st.subheader(f"📝 {len(changes)} Pending Change(s)")
