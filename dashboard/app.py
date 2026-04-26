@@ -99,11 +99,11 @@ def _sidebar() -> str:
 
     page = st.sidebar.radio(
         "Navigate",
-        ["Signals Today", "Discovery", "Portfolio", "Monitor",
+        ["How It Works", "Signals Today", "Discovery", "Portfolio", "Monitor",
          "Risk", "Strategy Performance", "Stops & TPs",
          "Sentiment", "ML Ensemble", "Config Editor",
          "Audit Log", "Live Trading"],
-        index=0,
+        index=1,
     )
 
     st.sidebar.divider()
@@ -133,6 +133,44 @@ def _sidebar() -> str:
 def page_signals() -> None:
     st.header("Signals Today")
 
+    # ── Daily Digest Card ─────────────────────────────────────────
+    today_signals = _load_signals(days_back=1)
+    today_audit = _load_audit(days_back=1)
+
+    st.markdown("### 📋 Daily Digest")
+    d1, d2, d3, d4 = st.columns(4)
+
+    sig_count = len(today_signals)
+    approved_count = len(today_signals[today_signals["approved"] == True]) if not today_signals.empty and "approved" in today_signals.columns else 0
+    blocked_count = sig_count - approved_count
+
+    d1.metric("Signals Generated", sig_count,
+              help="Total signals from all strategies today")
+    d2.metric("Approved", f"✅ {approved_count}",
+              help="Signals that passed confidence + risk checks")
+    d3.metric("Blocked", f"🚫 {blocked_count}",
+              help="Signals rejected (low confidence, risk limits, correlation)")
+
+    if not today_audit.empty and "status" in today_audit.columns:
+        submitted = (today_audit["status"] == "submitted").sum()
+        d4.metric("Orders Placed", f"📤 {submitted}")
+    else:
+        d4.metric("Orders Placed", "📤 0")
+
+    # Digest summary text
+    if not today_signals.empty and "ticker" in today_signals.columns and "direction" in today_signals.columns:
+        approved_df = today_signals[today_signals.get("approved", True) == True] if "approved" in today_signals.columns else today_signals
+        if not approved_df.empty:
+            trades = [f"{row['ticker']} {row['direction']}" for _, row in approved_df.head(5).iterrows()]
+            st.success(f"**Today's trades:** {', '.join(trades)}")
+        else:
+            st.info("No approved signals today — all strategies returned HOLD or were blocked by risk checks.")
+    else:
+        st.info("No signal data for today yet. Pipeline runs every 30 minutes during market hours.")
+
+    st.divider()
+
+    # ── Original signals view ─────────────────────────────────────
     days = st.slider("Look-back (days)", min_value=1, max_value=30, value=1)
     df   = _load_signals(days_back=days)
 
@@ -546,6 +584,62 @@ def page_audit() -> None:
         height=500,
     )
 
+    # ── Trade Explainer ───────────────────────────────────────────
+    if not filtered.empty and "ticker" in filtered.columns:
+        st.subheader("🔍 Trade Explainer")
+        st.caption("Select a trade to see why the system made that decision.")
+
+        trade_labels = []
+        for i, row in filtered.head(50).iterrows():
+            ts = str(row.get("timestamp_submitted", ""))[:16]
+            ticker = row.get("ticker", "?")
+            direction = row.get("direction", "?")
+            conf = row.get("confidence", 0)
+            trade_labels.append(f"{ts} | {ticker} {direction} (conf={conf:.2f})")
+
+        selected_idx = st.selectbox("Select trade", range(len(trade_labels)),
+                                     format_func=lambda i: trade_labels[i],
+                                     key="trade_explainer")
+
+        if selected_idx is not None:
+            trade = filtered.iloc[selected_idx]
+            with st.expander(f"Explain: {trade.get('ticker', '?')} {trade.get('direction', '?')}", expanded=True):
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Ticker", trade.get("ticker", "—"))
+                c2.metric("Direction", trade.get("direction", "—"))
+                c3.metric("Strategy", trade.get("strategy", "—"))
+                c4.metric("Confidence", f"{trade.get('confidence', 0):.2%}")
+
+                c5, c6, c7, c8 = st.columns(4)
+                c5.metric("Entry Price", f"${trade.get('entry_price', 0):,.2f}")
+                c6.metric("Position Size", f"${trade.get('position_size_usd', 0):,.2f}")
+                c7.metric("Stop Loss", f"${trade.get('stop_loss_price', 0):,.2f}")
+                c8.metric("Status", trade.get("status", "—"))
+
+                # Explain the decision
+                approved = trade.get("approved", True)
+                if approved:
+                    st.success("✅ **APPROVED** — passed all risk checks")
+                    st.markdown(f"""
+                    **Why this trade was taken:**
+                    - Strategy **{trade.get('strategy', '?')}** detected a **{trade.get('direction', '?')}** pattern
+                    - Confidence **{trade.get('confidence', 0):.2%}** exceeded the 60% minimum
+                    - Position sized at **${trade.get('position_size_usd', 0):,.2f}** (within 5% limit)
+                    - Stop loss set at **${trade.get('stop_loss_price', 0):,.2f}** to cap downside
+                    """)
+                else:
+                    reason = trade.get("block_reason", "Unknown")
+                    st.error(f"🚫 **BLOCKED** — {reason}")
+
+                # Show price chart if widget available
+                try:
+                    from dashboard.widgets.price_chart import render_price_chart
+                    render_price_chart(trade.get("ticker", ""), period="1mo",
+                                       show_controls=False, height=300,
+                                       key_prefix=f"audit_chart_{selected_idx}_")
+                except Exception:
+                    pass
+
     # Download button
     csv = filtered.to_csv(index=False).encode("utf-8")
     st.download_button(
@@ -691,7 +785,10 @@ def page_live_trading() -> None:
 def main() -> None:
     page = _sidebar()
 
-    if page == "Signals Today":
+    if page == "How It Works":
+        from dashboard.pages.onboarding import render_onboarding_page
+        render_onboarding_page()
+    elif page == "Signals Today":
         page_signals()
     elif page == "Discovery":
         from dashboard.pages.discovery import render_discovery_page
