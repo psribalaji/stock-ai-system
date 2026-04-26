@@ -124,11 +124,16 @@ class Notifier:
 
     def _send_telegram(self, text: str) -> None:
         try:
+            import os
             import httpx
-            cfg = self.config.notifications
-            url = f"https://api.telegram.org/bot{cfg.telegram_bot_token}/sendMessage"
+            token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+            chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+            if not token or not chat_id:
+                logger.debug("[Telegram] Missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID in env")
+                return
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
             resp = httpx.post(url, json={
-                "chat_id": cfg.telegram_chat_id,
+                "chat_id": chat_id,
                 "text": text,
                 "parse_mode": "HTML",
             }, timeout=10)

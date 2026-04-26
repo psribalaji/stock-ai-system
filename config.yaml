@@ -143,9 +143,9 @@ ml_ensemble:
 
 # ── Notifications ─────────────────────────────────────────────────
 notifications:
-  telegram_enabled:    false   # Set true + add bot token and chat ID
-  telegram_bot_token:  ""      # From @BotFather on Telegram
-  telegram_chat_id:    ""      # Your chat/group ID
+  telegram_enabled:    false   # Set true after adding tokens to .env
+  telegram_bot_token:  ""      # Read from .env: TELEGRAM_BOT_TOKEN
+  telegram_chat_id:    ""      # Read from .env: TELEGRAM_CHAT_ID
 
 # ── Logging ──────────────────────────────────────────────────────
 logging:
