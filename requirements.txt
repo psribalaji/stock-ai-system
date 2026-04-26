@@ -10,7 +10,7 @@ polygon-api-client>=1.12.0
 finnhub-python>=2.4.19
 
 # ── Technical Indicators ─────────────────────────────────────────
-pandas-ta>=0.3.14b
+pandas-ta==0.3.14b0
 
 # ── LLM Layer ───────────────────────────────────────────────────
 anthropic>=0.20.0
