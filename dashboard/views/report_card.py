@@ -30,7 +30,10 @@ def render_report_card_page() -> None:
     days_map = {"Last 7 days": 7, "Last 30 days": 30, "Last 90 days": 90, "All time": 3650}
     days = days_map[period]
 
-    audit = store.load_audit(days_back=days) if hasattr(store.load_audit, '__code__') else store.load_audit()
+    from datetime import date, timedelta
+    end = date.today()
+    start = None if days >= 3650 else end - timedelta(days=days)
+    audit = store.load_audit(start=start, end=end)
     signals = store.load_signals()
 
     if audit.empty and signals.empty:
