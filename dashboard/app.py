@@ -99,7 +99,7 @@ def _sidebar() -> str:
 
     page = st.sidebar.radio(
         "Navigate",
-        ["How It Works", "Signals Today", "Discovery", "Portfolio", "Monitor",
+        ["How It Works", "Signals Today", "Activity Feed", "Discovery", "Portfolio", "Monitor",
          "Risk", "Strategy Performance", "Stops & TPs",
          "Sentiment", "ML Ensemble", "Config Editor",
          "Audit Log", "Live Trading"],
@@ -870,6 +870,9 @@ def main() -> None:
         render_onboarding_page()
     elif page == "Signals Today":
         page_signals()
+    elif page == "Activity Feed":
+        from dashboard.views.activity_feed import render_activity_feed_page
+        render_activity_feed_page()
     elif page == "Discovery":
         from dashboard.views.discovery import render_discovery_page
         render_discovery_page()

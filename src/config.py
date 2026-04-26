@@ -102,6 +102,11 @@ class LoggingConfig(BaseModel):
     rotation: str = "1 week"
     retention: str = "1 month"
 
+class NotificationsConfig(BaseModel):
+    telegram_enabled: bool = False
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+
 class MLEnsembleConfig(BaseModel):
     enabled: bool = False
     min_training_trades: int = 300
@@ -134,6 +139,7 @@ class AppConfig(BaseModel):
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
     ml_ensemble: MLEnsembleConfig = Field(default_factory=MLEnsembleConfig)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
 
     @property

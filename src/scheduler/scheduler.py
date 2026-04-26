@@ -310,6 +310,20 @@ class TradingScheduler:
                 self.store.save_signals(df_out)
                 logger.info(f"[Scheduler] Pipeline: {len(decisions)} decision(s) saved")
 
+                # Notify for each approved decision
+                try:
+                    from src.notifications import notify
+                    for d in decisions:
+                        notify(
+                            f"{d.ticker} {d.direction} @ ${d.entry_price:,.2f} "
+                            f"({d.strategy}, conf={d.confidence:.2f})",
+                            level="trade" if d.direction == "BUY" else "sell",
+                            ticker=d.ticker,
+                            data={"confidence": d.confidence, "strategy": d.strategy},
+                        )
+                except Exception:
+                    pass
+
                 if self.on_decisions:
                     self.on_decisions(decisions)
             else:
@@ -358,11 +372,19 @@ class TradingScheduler:
             tp_triggered = self.executor.check_take_profits(price_map)
             for ticker in tp_triggered:
                 logger.info(f"[Scheduler] Take-profit triggered for {ticker}")
+                from src.notifications import notify
+                price = price_map.get(ticker, 0)
+                notify(f"{ticker} take-profit hit @ ${price:,.2f}",
+                       level="tp", ticker=ticker)
 
             # Check trailing stops
             stop_triggered = self.executor.update_trailing_stops(price_map)
             for ticker in stop_triggered:
                 logger.info(f"[Scheduler] Trailing stop triggered for {ticker}")
+                from src.notifications import notify
+                price = price_map.get(ticker, 0)
+                notify(f"{ticker} trailing stop triggered @ ${price:,.2f}",
+                       level="stop", ticker=ticker)
 
         except Exception as exc:
             logger.error(f"[Scheduler] position_check failed: {exc}")
@@ -376,6 +398,13 @@ class TradingScheduler:
         try:
             report = self.monitor.check_drift()
             logger.info(f"[Scheduler] Drift check complete:\n{report.summary()}")
+
+            # Notify if drift alerts found
+            if report.has_alerts:
+                from src.notifications import notify
+                for alert in report.alerts:
+                    level = "critical" if alert.severity == "CRITICAL" else "warning"
+                    notify(f"Drift: {alert.name} — {alert.message}", level=level)
 
             if self.on_drift:
                 self.on_drift(report)
@@ -417,6 +446,18 @@ class TradingScheduler:
                 f"[Discovery] Scan complete: {len(candidates)} trending, "
                 f"{len(passed)} passed screening, {added} new candidates added"
             )
+
+            # Notify for new discoveries
+            if added > 0:
+                from src.notifications import notify
+                for s in passed[:5]:  # notify top 5
+                    notify(
+                        f"{s.ticker} discovered — {s.mention_spike:.1f}x mention spike, "
+                        f"sentiment {s.avg_sentiment:+.2f}",
+                        level="discovery", ticker=s.ticker,
+                    )
+                if added > 5:
+                    notify(f"...and {added - 5} more new candidates", level="discovery")
 
             if self.on_discovery:
                 self.on_discovery(passed)

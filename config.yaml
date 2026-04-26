@@ -140,6 +140,13 @@ ml_ensemble:
   sell_threshold:      0.45    # Predict probability < this → SELL
   model_path:          "./data/ml_ensemble_model.pkl"
 
+
+# ── Notifications ─────────────────────────────────────────────────
+notifications:
+  telegram_enabled:    false   # Set true + add bot token and chat ID
+  telegram_bot_token:  ""      # From @BotFather on Telegram
+  telegram_chat_id:    ""      # Your chat/group ID
+
 # ── Logging ──────────────────────────────────────────────────────
 logging:
   level:               INFO    # DEBUG | INFO | WARNING | ERROR
