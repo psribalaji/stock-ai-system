@@ -10,7 +10,7 @@ polygon-api-client>=1.12.0
 finnhub-python>=2.4.19
 
 # ── Technical Indicators ─────────────────────────────────────────
-pandas-ta @ git+https://github.com/twopirllc/pandas-ta.git@development
+pandas-ta>=0.4.0
 
 # ── LLM Layer ───────────────────────────────────────────────────
 anthropic>=0.20.0
