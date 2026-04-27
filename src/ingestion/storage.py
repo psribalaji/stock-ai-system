@@ -48,33 +48,44 @@ class ParquetStore:
     # ── S3 helpers ────────────────────────────────────────────────
 
     def _get_s3(self):
-        """Return a boto3 S3 client, assuming role if AWS_ROLE_ARN is set."""
-        if self._s3 is not None:
-            return self._s3
-        try:
-            import boto3
-            from src.secrets import Secrets
-            role_arn = Secrets.aws_role_arn()
-            if role_arn:
-                # Local dev: assume role via STS
-                sts = boto3.client("sts")
-                creds = sts.assume_role(
-                    RoleArn=role_arn,
-                    RoleSessionName="stockai-parquet-store",
-                )["Credentials"]
-                self._s3 = boto3.client(
-                    "s3",
-                    aws_access_key_id=creds["AccessKeyId"],
-                    aws_secret_access_key=creds["SecretAccessKey"],
-                    aws_session_token=creds["SessionToken"],
-                )
-            else:
-                # EC2 / Lightsail / Streamlit Cloud: use attached role or env creds
-                self._s3 = boto3.client("s3")
-            return self._s3
-        except Exception as e:
-            logger.error(f"[S3] Failed to create S3 client: {e}")
-            raise
+        """Return a boto3 S3 client, refreshing role credentials if expired."""
+        import boto3, os
+        from datetime import datetime, timezone
+        from src.secrets import Secrets, _load_dotenv
+        _load_dotenv()
+
+        role_arn = Secrets.aws_role_arn()
+        region   = os.environ.get("AWS_REGION", "us-east-1")
+
+        if role_arn:
+            # Re-assume role if no client or credentials expire within 5 minutes
+            now = datetime.now(timezone.utc)
+            expiry = getattr(self, "_s3_creds_expiry", None)
+            if self._s3 is None or (expiry and (expiry - now).total_seconds() < 300):
+                try:
+                    sts   = boto3.client("sts", region_name=region)
+                    creds = sts.assume_role(
+                        RoleArn=role_arn,
+                        RoleSessionName="stockai-parquet-store",
+                        DurationSeconds=3600,
+                    )["Credentials"]
+                    self._s3 = boto3.client(
+                        "s3",
+                        region_name=region,
+                        aws_access_key_id=creds["AccessKeyId"],
+                        aws_secret_access_key=creds["SecretAccessKey"],
+                        aws_session_token=creds["SessionToken"],
+                    )
+                    self._s3_creds_expiry = creds["Expiration"]
+                    logger.debug("[S3] Role credentials refreshed")
+                except Exception as e:
+                    logger.error(f"[S3] Failed to assume role: {e}")
+                    raise
+        else:
+            if self._s3 is None:
+                self._s3 = boto3.client("s3", region_name=region)
+
+        return self._s3
 
     def _s3_key(self, local_path: Path) -> str:
         """Convert a local path to an S3 key."""
