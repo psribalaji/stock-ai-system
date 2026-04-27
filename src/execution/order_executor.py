@@ -93,9 +93,21 @@ class OrderExecutor:
             List of OrderResult, one per decision.
         """
         results = []
-        for decision in decisions:
+        submitted_this_batch = set()
+        # Sort by confidence descending so the best signal per ticker wins
+        sorted_decisions = sorted(decisions, key=lambda d: d.confidence, reverse=True)
+        for decision in sorted_decisions:
+            # Dedup: only one BUY per ticker per batch (pick highest confidence)
+            if decision.direction == "BUY" and decision.ticker in submitted_this_batch:
+                logger.info(
+                    f"[OrderExecutor] SKIPPED duplicate BUY for {decision.ticker} "
+                    f"(already submitted this cycle)"
+                )
+                continue
             result = self.execute(decision)
             results.append(result)
+            if result.status == "submitted" and decision.direction == "BUY":
+                submitted_this_batch.add(decision.ticker)
 
         # Persist all results to audit log
         if results:
