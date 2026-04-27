@@ -109,48 +109,133 @@ class MarketDataService:
         tickers: Optional[list[str]] = None,
     ) -> dict[str, int]:
         """
-        Fetch only new bars since the last stored date for each ticker.
-        Called daily at 5am by the scheduler.
+        Fetch only new bars since the last stored date using Alpaca (1 batch
+        call for all tickers). Falls back to Polygon per-ticker for any that
+        have no local history yet (first-time full backfill).
         """
         tickers = tickers or self.config.assets.all_tradeable
         results = {}
 
+        # ── First-time tickers: full backfill from Polygon ────────────────────
         import time as _time
-        for ticker in tickers:
+        new_tickers = [t for t in tickers if self.store.load_ohlcv(t).empty]
+        for ticker in new_tickers:
             try:
-                existing = self.store.load_ohlcv(ticker)
-                if existing.empty:
-                    # First time — fetch full history
-                    result = self.fetch_and_store_historical([ticker])
-                    results[ticker] = result[ticker].get("rows", 0)
-                    _time.sleep(13.0)
-                    continue
+                result = self.fetch_and_store_historical([ticker])
+                results[ticker] = result.get(ticker, {}).get("rows", 0)
+                logger.info(f"{ticker}: first-time backfill complete")
+            except Exception as e:
+                logger.error(f"Backfill failed for {ticker}: {e}")
+                results[ticker] = -1
+            _time.sleep(13.0)  # Polygon free tier: 5 calls/min
 
-                # Get last stored date and fetch from there
-                last_date = pd.to_datetime(
-                    existing["timestamp"]
-                ).max().date()
-                start = last_date + timedelta(days=1)
+        # ── Incremental tickers: batch fetch via Alpaca ───────────────────────
+        existing_tickers = [t for t in tickers if t not in new_tickers]
+        if not existing_tickers:
+            return results
 
-                if start > date.today():
-                    logger.debug(f"{ticker} is up to date")
-                    results[ticker] = 0
-                    continue
+        # Find the oldest last_date across all tickers — fetch from there
+        start_dates = {}
+        for ticker in existing_tickers:
+            df = self.store.load_ohlcv(ticker)
+            last_date = pd.to_datetime(df["timestamp"]).max().date()
+            start = last_date + timedelta(days=1)
+            if start <= date.today():
+                start_dates[ticker] = start
 
-                df = self.polygon.fetch_daily_bars(ticker, start, date.today())
-                if not df.empty:
-                    self.store.save_ohlcv(ticker, df)
-                    results[ticker] = len(df)
-                    logger.info(f"{ticker}: +{len(df)} new bars")
-                else:
-                    results[ticker] = 0
+        fetch_tickers = list(start_dates.keys())
+        up_to_date    = [t for t in existing_tickers if t not in start_dates]
+        for t in up_to_date:
+            results[t] = 0
+            logger.debug(f"{t} is up to date")
 
-                _time.sleep(13.0)  # Polygon free tier: 5 calls/min = 12s minimum
+        if fetch_tickers:
+            try:
+                from src.ingestion.alpaca_client import AlpacaClient
+                from alpaca.data.requests import StockBarsRequest
+                from alpaca.data.timeframe import TimeFrame
+                from datetime import datetime as dt
+
+                alpaca  = AlpacaClient()
+                # Use earliest start date so all tickers get their missing bars
+                min_start = min(start_dates.values())
+
+                # Filter to stock tickers only (Alpaca doesn't serve BTC/SOL via StockBarsRequest)
+                stock_tickers = [t for t in fetch_tickers if t not in ("BTC", "SOL")]
+                crypto_tickers = [t for t in fetch_tickers if t in ("BTC", "SOL")]
+
+                if stock_tickers:
+                    request = StockBarsRequest(
+                        symbol_or_symbols=stock_tickers,
+                        timeframe=TimeFrame.Day,
+                        start=dt.combine(min_start, dt.min.time()),
+                        feed=self.config.data.alpaca_feed,
+                    )
+                    bars = alpaca._data_client.get_stock_bars(request)
+
+                    for ticker in stock_tickers:
+                        try:
+                            if bars and ticker in bars.data and bars.data[ticker]:
+                                records = [
+                                    {
+                                        "timestamp": bar.timestamp,
+                                        "open":      bar.open,
+                                        "high":      bar.high,
+                                        "low":       bar.low,
+                                        "close":     bar.close,
+                                        "volume":    bar.volume,
+                                        "vwap":      getattr(bar, "vwap", None),
+                                        "ticker":    ticker,
+                                        "source":    "alpaca",
+                                    }
+                                    for bar in bars.data[ticker]
+                                    if bar.timestamp.date() >= start_dates[ticker]
+                                ]
+                                if records:
+                                    df_new = pd.DataFrame(records)
+                                    self.store.save_ohlcv(ticker, df_new)
+                                    results[ticker] = len(records)
+                                    logger.info(f"{ticker}: +{len(records)} new bars (Alpaca)")
+                                else:
+                                    results[ticker] = 0
+                            else:
+                                results[ticker] = 0
+                        except Exception as e:
+                            logger.error(f"Alpaca parse failed for {ticker}: {e}")
+                            results[ticker] = -1
+
+                # Crypto: fall back to Polygon (Alpaca crypto API is separate)
+                for ticker in crypto_tickers:
+                    try:
+                        df = self.polygon.fetch_daily_bars(ticker, start_dates[ticker], date.today())
+                        if not df.empty:
+                            self.store.save_ohlcv(ticker, df)
+                            results[ticker] = len(df)
+                            logger.info(f"{ticker}: +{len(df)} new bars (Polygon)")
+                        else:
+                            results[ticker] = 0
+                        _time.sleep(13.0)
+                    except Exception as e:
+                        logger.error(f"Polygon failed for {ticker}: {e}")
+                        results[ticker] = -1
 
             except Exception as e:
-                logger.error(f"Incremental update failed for {ticker}: {e}")
-                results[ticker] = -1
-                _time.sleep(13.0)  # same rate limit applies after failure
+                logger.error(f"Alpaca batch fetch failed: {e} — falling back to Polygon")
+                # Full Polygon fallback
+                for ticker in fetch_tickers:
+                    if ticker in results:
+                        continue
+                    try:
+                        df = self.polygon.fetch_daily_bars(ticker, start_dates[ticker], date.today())
+                        if not df.empty:
+                            self.store.save_ohlcv(ticker, df)
+                            results[ticker] = len(df)
+                        else:
+                            results[ticker] = 0
+                        _time.sleep(13.0)
+                    except Exception as e2:
+                        logger.error(f"Polygon fallback failed for {ticker}: {e2}")
+                        results[ticker] = -1
 
         return results
 
