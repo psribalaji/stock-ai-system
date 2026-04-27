@@ -9,6 +9,10 @@ Usage:
     python scripts/run_job.py drift_check
 """
 import sys
+from pathlib import Path
+
+# Ensure project root is on the path regardless of where script is called from
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 JOBS = ["data_sync", "signal_pipeline", "discovery_scan", "position_check", "drift_check", "recalibrate"]
 
