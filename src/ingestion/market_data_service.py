@@ -123,7 +123,7 @@ class MarketDataService:
                     # First time — fetch full history
                     result = self.fetch_and_store_historical([ticker])
                     results[ticker] = result[ticker].get("rows", 0)
-                    _time.sleep(1.5)
+                    _time.sleep(13.0)
                     continue
 
                 # Get last stored date and fetch from there
@@ -145,12 +145,12 @@ class MarketDataService:
                 else:
                     results[ticker] = 0
 
-                _time.sleep(1.0)  # avoid Polygon free-tier rate limit
+                _time.sleep(13.0)  # Polygon free tier: 5 calls/min = 12s minimum
 
             except Exception as e:
                 logger.error(f"Incremental update failed for {ticker}: {e}")
                 results[ticker] = -1
-                _time.sleep(2.0)  # back off longer after a failure
+                _time.sleep(13.0)  # same rate limit applies after failure
 
         return results
 
