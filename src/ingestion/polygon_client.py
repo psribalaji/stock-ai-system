@@ -9,7 +9,7 @@ from typing import Optional
 import time
 import pandas as pd
 from loguru import logger
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, retry_if_not_exception_message
 
 from src.secrets import Secrets
 
@@ -39,8 +39,8 @@ class PolygonClient:
             )
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=2, min=10, max=60),
         retry=retry_if_exception_type(Exception),
         reraise=True,
     )
