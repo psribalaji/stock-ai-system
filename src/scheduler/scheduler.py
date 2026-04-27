@@ -321,14 +321,16 @@ class TradingScheduler:
                 portfolio=portfolio,
             )
 
-            if decisions:
-                df_out = self.engine.decisions_to_dataframe(decisions)
-                self.store.save_signals(df_out)
-                logger.info(f"[Scheduler] Pipeline: {len(decisions)} decision(s) saved")
+            try:
+                from src.notifications import notify
+                from datetime import datetime as _dt
+                now_str = _dt.now(ET).strftime("%H:%M ET")
 
-                # Notify for each approved decision
-                try:
-                    from src.notifications import notify
+                if decisions:
+                    df_out = self.engine.decisions_to_dataframe(decisions)
+                    self.store.save_signals(df_out)
+                    logger.info(f"[Scheduler] Pipeline: {len(decisions)} decision(s) saved")
+
                     for d in decisions:
                         notify(
                             f"{d.ticker} {d.direction} @ ${d.entry_price:,.2f} "
@@ -337,13 +339,17 @@ class TradingScheduler:
                             ticker=d.ticker,
                             data={"confidence": d.confidence, "strategy": d.strategy},
                         )
-                except Exception:
-                    pass
+                else:
+                    logger.info("[Scheduler] Pipeline: no approved decisions this cycle")
+                    notify(
+                        f"Scan {now_str} — {len(data_map)} tickers checked, no signals",
+                        level="info",
+                    )
+            except Exception:
+                pass
 
-                if self.on_decisions:
-                    self.on_decisions(decisions)
-            else:
-                logger.info("[Scheduler] Pipeline: no approved decisions this cycle")
+            if decisions and self.on_decisions:
+                self.on_decisions(decisions)
 
         except Exception as exc:
             logger.error(f"[Scheduler] signal_pipeline failed: {exc}")
@@ -468,17 +474,22 @@ class TradingScheduler:
                 f"{len(passed)} passed screening, {added} new candidates added"
             )
 
-            # Notify for new discoveries
+            from src.notifications import notify
             if added > 0:
-                from src.notifications import notify
-                for s in passed[:5]:  # notify top 5
+                for s in passed[:5]:
                     notify(
-                        f"{s.ticker} discovered — {s.mention_spike:.1f}x mention spike, "
+                        f"{s.ticker} discovered — {s.mention_spike:.1f}x spike, "
                         f"sentiment {s.avg_sentiment:+.2f}",
                         level="discovery", ticker=s.ticker,
                     )
                 if added > 5:
                     notify(f"...and {added - 5} more new candidates", level="discovery")
+            else:
+                notify(
+                    f"Discovery scan — {len(candidates)} trending, "
+                    f"{len(passed)} passed, {added} new",
+                    level="info",
+                )
 
             if self.on_discovery:
                 self.on_discovery(passed)
