@@ -242,8 +242,8 @@ class TradingScheduler:
             from src.ingestion.market_data_service import MarketDataService
             svc = MarketDataService()
             results = svc.fetch_incremental_update(tickers)
-            for ticker, ok in results.items():
-                if ok:
+            for ticker, rows in results.items():
+                if rows >= 0:
                     synced_count += 1
                 else:
                     failed_tickers.append(ticker)
