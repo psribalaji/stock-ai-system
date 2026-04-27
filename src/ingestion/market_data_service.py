@@ -115,6 +115,7 @@ class MarketDataService:
         tickers = tickers or self.config.assets.all_tradeable
         results = {}
 
+        import time as _time
         for ticker in tickers:
             try:
                 existing = self.store.load_ohlcv(ticker)
@@ -122,6 +123,7 @@ class MarketDataService:
                     # First time — fetch full history
                     result = self.fetch_and_store_historical([ticker])
                     results[ticker] = result[ticker].get("rows", 0)
+                    _time.sleep(1.5)
                     continue
 
                 # Get last stored date and fetch from there
@@ -143,9 +145,12 @@ class MarketDataService:
                 else:
                     results[ticker] = 0
 
+                _time.sleep(1.0)  # avoid Polygon free-tier rate limit
+
             except Exception as e:
                 logger.error(f"Incremental update failed for {ticker}: {e}")
                 results[ticker] = -1
+                _time.sleep(2.0)  # back off longer after a failure
 
         return results
 
