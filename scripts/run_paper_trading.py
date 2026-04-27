@@ -142,6 +142,15 @@ def main() -> None:
         "during market hours (9:30am–4:00pm ET, Mon–Fri)[/dim]\n"
     )
 
+    # ── Start Telegram bot (if configured) ────────────────────────────────────
+    from src.notifications.telegram_bot import TelegramBot
+    bot = TelegramBot(executor=executor, risk_manager=engine.risk, store=store)
+    if bot.is_configured:
+        bot.start_background()
+        console.print("[green]✓ Telegram bot started — send /help to your bot[/green]")
+    else:
+        console.print("[dim]Telegram bot not configured — set TELEGRAM_BOT_TOKEN in .env[/dim]")
+
     scheduler.start()   # blocking — runs until Ctrl+C
 
 
