@@ -241,16 +241,12 @@ class TradingScheduler:
         try:
             from src.ingestion.market_data_service import MarketDataService
             svc = MarketDataService()
-            for ticker in tickers:
-                try:
-                    df = svc.get_latest_bars(ticker)
-                    if not df.empty:
-                        self.store.save_ohlcv(ticker, df)
-                        synced_count += 1
-                        logger.debug(f"[Scheduler] Synced {ticker}: {len(df)} bars")
-                except Exception as exc:
+            results = svc.fetch_incremental_update(tickers)
+            for ticker, ok in results.items():
+                if ok:
+                    synced_count += 1
+                else:
                     failed_tickers.append(ticker)
-                    logger.error(f"[Scheduler] data_sync failed for {ticker}: {exc}")
         except Exception as exc:
             logger.error(f"[Scheduler] data_sync job failed: {exc}")
             try:
