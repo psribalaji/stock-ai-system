@@ -288,25 +288,78 @@ class TelegramBot:
     # ── LLM Q&A ──────────────────────────────────────────────────
 
     def _cmd_ask(self, question: str) -> None:
-        """Send free-form question to Claude with system context."""
+        """Send free-form question to Claude with full system context."""
         try:
-            # Build context from current state
-            context_parts = [f"Question: {question}"]
+            # Build rich context from current state
+            context_parts = []
 
-            if self._store:
-                try:
-                    end = date.today()
-                    start = end - timedelta(days=1)
-                    signals = self._store.load_signals(start=start, end=end)
-                    if not signals.empty:
-                        context_parts.append(f"Today's signals: {len(signals)} total, "
-                                             f"{len(signals[signals.get('approved', True) == True]) if 'approved' in signals.columns else len(signals)} approved")
-                except Exception:
-                    pass
+            # System architecture summary
+            context_parts.append(
+                "SYSTEM: StockAI is an automated stock trading system with 5 strategies "
+                "(momentum, trend_following, volatility_breakout, mean_reversion, ml_ensemble). "
+                "It computes 30+ technical indicators (RSI, MACD, Bollinger Bands, ADX, ATR, etc). "
+                "Confidence = base_win_rate × regime_mult × volume_mult × sentiment_mult. "
+                "Minimum confidence to trade: 60%. Max 5 positions, 5% each. "
+                "Trailing stop at 2×ATR below peak. Take-profit at 2:1 reward-to-risk."
+            )
 
+            # Config
+            from src.config import get_config
+            cfg = get_config()
+            context_parts.append(
+                f"CONFIG: mode={cfg.trading.mode}, min_confidence={cfg.risk.min_confidence}, "
+                f"max_positions={cfg.risk.max_open_positions}, stop_loss={cfg.risk.stop_loss_pct:.0%}, "
+                f"trailing_stop={cfg.risk.trailing_stop_atr_mult}×ATR, "
+                f"take_profit={cfg.risk.reward_risk_ratio}:1, "
+                f"max_correlation={cfg.risk.max_portfolio_corr}, "
+                f"signal_interval={cfg.schedule.signal_interval_min}min"
+            )
+
+            # Positions
+            try:
+                from src.ingestion.alpaca_client import AlpacaClient
+                acct = AlpacaClient().get_account()
+                positions = AlpacaClient().get_positions()
+                context_parts.append(
+                    f"PORTFOLIO: ${acct.get('portfolio_value', 0):,.2f} total, "
+                    f"${acct.get('cash', 0):,.2f} cash"
+                )
+                if not positions.empty:
+                    pos_strs = []
+                    for _, p in positions.iterrows():
+                        pos_strs.append(f"{p.get('ticker','?')}: ${p.get('unrealized_pl',0):+,.2f}")
+                    context_parts.append(f"POSITIONS: {', '.join(pos_strs)}")
+            except Exception:
+                pass
+
+            # Trailing stops
+            if self._executor:
+                trailing = getattr(self._executor, "_trailing_stops", {})
+                if trailing:
+                    stop_strs = [f"{t}: stop=${s['stop_price']:.2f}" for t, s in trailing.items()]
+                    context_parts.append(f"STOPS: {', '.join(stop_strs)}")
+
+            # Risk status
             if self._risk_manager:
                 status = self._risk_manager.get_status()
-                context_parts.append(f"Risk status: paused={status['paused']}, killed={status['killed']}")
+                context_parts.append(f"RISK: paused={status['paused']}, killed={status['killed']}")
+
+            # Recent signals
+            if self._store:
+                try:
+                    from datetime import date, timedelta
+                    signals = self._store.load_signals(start=date.today() - timedelta(days=1), end=date.today())
+                    if not signals.empty:
+                        approved = len(signals[signals["approved"] == True]) if "approved" in signals.columns else len(signals)
+                        context_parts.append(f"SIGNALS TODAY: {len(signals)} total, {approved} approved")
+                        # Include last 3 signals detail
+                        for _, r in signals.tail(3).iterrows():
+                            context_parts.append(
+                                f"  {r.get('ticker','?')} {r.get('direction','?')} "
+                                f"({r.get('strategy','?')}, conf={r.get('confidence',0):.2f})"
+                            )
+                except Exception:
+                    pass
 
             context = "\n".join(context_parts)
 
@@ -315,13 +368,15 @@ class TelegramBot:
             client = anthropic.Anthropic(api_key=Secrets.anthropic_api_key())
             resp = client.messages.create(
                 model="claude-sonnet-4-6",
-                max_tokens=300,
+                max_tokens=500,
                 system=(
-                    "You are a helpful assistant for a stock trading system called StockAI. "
-                    "Answer concisely in 2-4 sentences. Use the provided context about the system's "
-                    "current state. If you don't know, say so. Keep responses under 300 chars for Telegram."
+                    "You are the AI assistant for StockAI, an automated stock trading system. "
+                    "You have full context about the system's architecture, current config, "
+                    "open positions, trailing stops, and recent signals. "
+                    "Answer questions specifically about THIS system using the provided context. "
+                    "Be concise (3-5 sentences max). Use numbers from the context, not generic advice."
                 ),
-                messages=[{"role": "user", "content": context}],
+                messages=[{"role": "user", "content": f"{context}\n\nUSER QUESTION: {question}"}],
             )
             answer = resp.content[0].text.strip()
             self._send(f"🤖 {answer}")
