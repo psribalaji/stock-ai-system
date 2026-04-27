@@ -170,4 +170,4 @@ discovery:
     - stocks
     - stockmarket
   news_lookback_hours:  48
-  auto_approve:         false
+  auto_approve:         true    # Auto-approve for paper trading (set false for live)

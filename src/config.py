@@ -125,7 +125,7 @@ class DiscoveryConfig(BaseModel):
     mention_spike_factor: float      = 3.0
     reddit_subreddits:    List[str]  = ["wallstreetbets", "investing", "stocks", "stockmarket"]
     news_lookback_hours:  int        = 48
-    auto_approve:         bool       = False  # ALWAYS False — human approval required
+    auto_approve:         bool       = False  # True for paper trading, False for live
 
 class AppConfig(BaseModel):
     trading: TradingConfig = Field(default_factory=TradingConfig)

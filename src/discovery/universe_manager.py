@@ -46,11 +46,15 @@ class UniverseManager:
     via the dashboard before any ticker enters the trading pipeline.
     """
 
-    def __init__(self, base_path: str = "./data", sync_to_s3: bool | None = None) -> None:
+    def __init__(self, base_path: str = "./data", sync_to_s3: bool | None = None, auto_approve: bool | None = None) -> None:
         self.config = get_config()
-        self.watchlist_path = Path(base_path) / "discovery" / "watchlist.parquet"
+        self.base = Path(base_path)
+        self.watchlist_path = self.base / "discovery" / "watchlist.parquet"
         self.watchlist_path.parent.mkdir(parents=True, exist_ok=True)
         self._sync = self.config.data.sync_to_s3 if sync_to_s3 is None else sync_to_s3
+        self._auto_approve = auto_approve if auto_approve is not None else (
+            self.config.discovery.auto_approve and self.config.is_paper
+        )
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -80,13 +84,14 @@ class UniverseManager:
                 continue
 
             sources_str = ",".join(st.trending_data.sources)
+            auto = self._auto_approve
             new_row = {
                 "ticker":        st.ticker,
                 "company_name":  st.company_name,
                 "sector":        st.sector,
-                "status":        STATUS_CANDIDATE,
+                "status":        STATUS_APPROVED if auto else STATUS_CANDIDATE,
                 "added_at":      now,
-                "approved_at":   None,
+                "approved_at":   now if auto else None,
                 "mention_spike": st.trending_data.mention_spike,
                 "avg_sentiment": st.trending_data.avg_sentiment,
                 "sources":       sources_str,
@@ -99,7 +104,8 @@ class UniverseManager:
 
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             added += 1
-            logger.info(f"[UniverseManager] Added candidate: {st.ticker} "
+            status_label = "auto-approved" if auto else "candidate"
+            logger.info(f"[UniverseManager] Added {status_label}: {st.ticker} "
                         f"(spike={st.trending_data.mention_spike:.1f}x)")
 
         if added > 0:
