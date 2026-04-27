@@ -137,6 +137,11 @@ class UniverseManager:
         df.loc[mask, "approved_at"] = datetime.now(timezone.utc)
         self._save(df)
         logger.info(f"[UniverseManager] Approved: {ticker}")
+        try:
+            from src.notifications import notify
+            notify(f"✅ {ticker} approved — added to trading universe", level="info", ticker=ticker)
+        except Exception:
+            pass
         return True
 
     def ignore(self, ticker: str) -> bool:
@@ -161,6 +166,11 @@ class UniverseManager:
         df.loc[mask, "status"] = STATUS_IGNORED
         self._save(df)
         logger.info(f"[UniverseManager] Ignored: {ticker}")
+        try:
+            from src.notifications import notify
+            notify(f"🚫 {ticker} ignored — excluded from future candidates", level="warning", ticker=ticker)
+        except Exception:
+            pass
         return True
 
     def expire_old(self, days: int = 14) -> int:
