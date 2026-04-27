@@ -108,6 +108,20 @@ class UniverseManager:
             logger.info(f"[UniverseManager] Added {status_label}: {st.ticker} "
                         f"(spike={st.trending_data.mention_spike:.1f}x)")
 
+            try:
+                from src.notifications import notify
+                if auto:
+                    notify(f"{st.ticker} auto-approved for trading "
+                           f"({st.trending_data.mention_spike:.1f}x spike, "
+                           f"sentiment {st.trending_data.avg_sentiment:+.2f})",
+                           level="approval", ticker=st.ticker)
+                else:
+                    notify(f"{st.ticker} needs approval "
+                           f"({st.trending_data.mention_spike:.1f}x spike)",
+                           level="approval", ticker=st.ticker)
+            except Exception:
+                pass
+
         if added > 0:
             self._save(df)
 
@@ -139,7 +153,7 @@ class UniverseManager:
         logger.info(f"[UniverseManager] Approved: {ticker}")
         try:
             from src.notifications import notify
-            notify(f"✅ {ticker} approved — added to trading universe", level="info", ticker=ticker)
+            notify(f"✅ {ticker} approved — added to trading universe", level="approval", ticker=ticker)
         except Exception:
             pass
         return True
