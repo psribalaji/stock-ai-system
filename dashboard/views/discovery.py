@@ -261,7 +261,7 @@ def render_discovery_page() -> None:
             with col_ignore:
                 if st.button("Ignore", key=f"ignore_{ticker}"):
                     manager.ignore(ticker)
-                    st.toast(f"{ticker} ignored.", icon="✗")
+                    st.toast(f"{ticker} ignored.", icon="🚫")
                     st.rerun()
 
             # ── Explain section ───────────────────────────────────────
