@@ -556,37 +556,47 @@ class TradingScheduler:
 
     def _build_portfolio_state(self) -> PortfolioState:
         """
-        Build a PortfolioState from the audit log.
-        Falls back to empty portfolio if no audit data exists.
+        Build a PortfolioState from live Alpaca data.
+        Uses actual positions and account value — not the audit log — so ghost
+        positions (filled on Alpaca but errored locally) are always counted.
         """
         try:
-            audit = self.store.load_audit()
-            total_value = 100_000.0  # paper account default
+            from src.ingestion.alpaca_client import AlpacaClient
+            alpaca = AlpacaClient()
 
-            if audit.empty:
-                return PortfolioState(
-                    total_value_usd=total_value,
-                    cash_usd=total_value,
-                    open_positions=0,
-                    crypto_exposure_usd=0.0,
-                    daily_pnl_pct=0.0,
-                    peak_value_usd=total_value,
-                )
+            account   = alpaca.get_account()
+            positions = alpaca.get_positions()
 
-            # Count open positions: BUYs without matching SELLs
-            open_count = 0
-            if "direction" in audit.columns and "ticker" in audit.columns:
-                buys  = set(audit[audit["direction"] == "BUY"]["ticker"].unique())
-                sells = set(audit[audit["direction"] == "SELL"]["ticker"].unique())
-                open_count = len(buys - sells)
+            total_value = account["portfolio_value"]
+            cash        = account["cash"]
+
+            # Real open position count from Alpaca
+            open_count = len(positions) if not positions.empty else 0
+
+            # Crypto exposure: sum market value of BTC/SOL positions
+            crypto_tickers = set(self.config.assets.crypto)
+            if not positions.empty and "ticker" in positions.columns:
+                crypto_rows = positions[positions["ticker"].isin(crypto_tickers)]
+                crypto_exposure = float(crypto_rows["market_value"].sum()) if not crypto_rows.empty else 0.0
+            else:
+                crypto_exposure = 0.0
+
+            # Daily P&L from Alpaca portfolio history
+            daily_pnl_pct = 0.0
+            try:
+                history = alpaca._trading_client.get_portfolio_history()
+                if history and history.profit_loss_pct and len(history.profit_loss_pct) > 0:
+                    daily_pnl_pct = float(history.profit_loss_pct[-1]) or 0.0
+            except Exception:
+                pass
 
             return PortfolioState(
                 total_value_usd=total_value,
-                cash_usd=total_value,
+                cash_usd=cash,
                 open_positions=open_count,
-                crypto_exposure_usd=0.0,
-                daily_pnl_pct=0.0,
-                peak_value_usd=total_value,
+                crypto_exposure_usd=crypto_exposure,
+                daily_pnl_pct=daily_pnl_pct,
+                peak_value_usd=max(total_value, getattr(self, "_peak_value", total_value)),
             )
         except Exception as exc:
             logger.warning(f"[Scheduler] Could not build portfolio state: {exc} — using default")
