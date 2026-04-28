@@ -374,44 +374,62 @@ class TradingScheduler:
         logger.debug("[Scheduler] Running position_check job")
 
         try:
-            # Get current prices for held tickers only
+            from src.ingestion.alpaca_client import AlpacaClient
+            from src.notifications import notify
+            alpaca = AlpacaClient()
+
+            # ── Hard stop loss: check ALL held positions regardless of memory state ──
+            # This catches positions that were opened before a restart or that errored
+            # during order submission but still filled on Alpaca.
+            positions = alpaca._trading_client.get_all_positions()
+            stop_pct = self.config.risk.stop_loss_pct  # 0.07
+            for p in positions:
+                ticker = p.symbol
+                unrealized_pct = float(p.unrealized_plpc)  # e.g. -0.087 = -8.7%
+                if unrealized_pct <= -stop_pct:
+                    current_price = float(p.current_price)
+                    entry_price   = float(p.avg_entry_price)
+                    logger.warning(
+                        f"[Scheduler] Hard stop triggered: {ticker} "
+                        f"down {unrealized_pct*100:.1f}% "
+                        f"(entry=${entry_price:.2f}, now=${current_price:.2f})"
+                    )
+                    # Submit market sell
+                    try:
+                        qty = float(p.qty)
+                        alpaca.submit_market_order(ticker, qty, "sell")
+                        notify(
+                            f"🛑 Stop loss hit: SELL {ticker} @ ${current_price:.2f} "
+                            f"({unrealized_pct*100:.1f}%)",
+                            level="stop", ticker=ticker,
+                        )
+                    except Exception as sell_exc:
+                        logger.error(f"[Scheduler] Stop loss SELL failed for {ticker}: {sell_exc}")
+
+            # ── In-memory trailing stops and take-profits ─────────────────────────
             price_map: dict = {}
             trailing_stops = getattr(self.executor, "_trailing_stops", {})
-            take_profits = getattr(self.executor, "_take_profits", {})
+            take_profits   = getattr(self.executor, "_take_profits", {})
             tickers_to_check = set(trailing_stops.keys()) | set(take_profits.keys())
 
-            if not tickers_to_check:
-                return
+            if tickers_to_check:
+                for ticker in tickers_to_check:
+                    price = alpaca.get_latest_price(ticker)
+                    if price is not None:
+                        price_map[ticker] = price
 
-            # Use live Alpaca prices — Parquet is only updated at 5am and would
-            # give yesterday's close, making stop/TP checks meaningless intraday.
-            from src.ingestion.alpaca_client import AlpacaClient
-            alpaca = AlpacaClient()
-            for ticker in tickers_to_check:
-                price = alpaca.get_latest_price(ticker)
-                if price is not None:
-                    price_map[ticker] = price
+            if price_map:
+                tp_triggered = self.executor.check_take_profits(price_map)
+                for ticker in tp_triggered:
+                    logger.info(f"[Scheduler] Take-profit triggered for {ticker}")
+                    price = price_map.get(ticker, 0)
+                    notify(f"{ticker} take-profit hit @ ${price:,.2f}", level="tp", ticker=ticker)
 
-            if not price_map:
-                return
-
-            # Check take-profits first (higher priority)
-            tp_triggered = self.executor.check_take_profits(price_map)
-            for ticker in tp_triggered:
-                logger.info(f"[Scheduler] Take-profit triggered for {ticker}")
-                from src.notifications import notify
-                price = price_map.get(ticker, 0)
-                notify(f"{ticker} take-profit hit @ ${price:,.2f}",
-                       level="tp", ticker=ticker)
-
-            # Check trailing stops
-            stop_triggered = self.executor.update_trailing_stops(price_map)
-            for ticker in stop_triggered:
-                logger.info(f"[Scheduler] Trailing stop triggered for {ticker}")
-                from src.notifications import notify
-                price = price_map.get(ticker, 0)
-                notify(f"{ticker} trailing stop triggered @ ${price:,.2f}",
-                       level="stop", ticker=ticker)
+                stop_triggered = self.executor.update_trailing_stops(price_map)
+                for ticker in stop_triggered:
+                    logger.info(f"[Scheduler] Trailing stop triggered for {ticker}")
+                    price = price_map.get(ticker, 0)
+                    notify(f"{ticker} trailing stop triggered @ ${price:,.2f}", level="stop", ticker=ticker)
 
         except Exception as exc:
             logger.error(f"[Scheduler] position_check failed: {exc}")
