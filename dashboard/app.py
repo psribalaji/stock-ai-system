@@ -193,7 +193,7 @@ def page_signals() -> None:
         tickers = ["All"] + sorted(df["ticker"].unique().tolist()) if "ticker" in df.columns else ["All"]
         ticker_filter = st.selectbox("Ticker", tickers)
     with col2:
-        strategies = ["All"] + sorted(df["strategy"].unique().tolist()) if "strategy" in df.columns else ["All"]
+        strategies = ["All"] + sorted(s for s in df["strategy"].unique().tolist() if s and str(s) != "nan") if "strategy" in df.columns else ["All"]
         strategy_filter = st.selectbox("Strategy", strategies)
     with col3:
         direction_filter = st.selectbox("Direction", ["All", "BUY", "SELL"])
@@ -652,7 +652,7 @@ def page_audit() -> None:
         tickers = ["All"] + sorted(df["ticker"].unique().tolist()) if "ticker" in df.columns else ["All"]
         ticker_filter = st.selectbox("Ticker", tickers, key="audit_ticker")
     with col2:
-        strategies = ["All"] + sorted(df["strategy"].unique().tolist()) if "strategy" in df.columns else ["All"]
+        strategies = ["All"] + sorted(s for s in df["strategy"].unique().tolist() if s and str(s) != "nan") if "strategy" in df.columns else ["All"]
         strategy_filter = st.selectbox("Strategy", strategies, key="audit_strat")
 
     filtered = df.copy()
