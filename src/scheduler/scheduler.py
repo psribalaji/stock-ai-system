@@ -102,6 +102,9 @@ class TradingScheduler:
             return
         self._scheduler.start()
         self._running = True
+        # Restore trailing stops for any positions held before this restart
+        if self.executor is not None:
+            self.executor.restore_trailing_stops()
         logger.info("[Scheduler] Started (background)")
 
     def start(self) -> None:

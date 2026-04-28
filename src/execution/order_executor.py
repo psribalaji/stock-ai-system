@@ -14,6 +14,7 @@ Usage:
 """
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -48,6 +49,7 @@ class OrderResult:
     error: str              # Empty on success
     approved: bool          # Always True (only approved decisions reach executor)
     block_reason: str       # Propagated from TradeDecision
+    fill_price: float = 0.0  # Actual fill price (polled after submission)
 
 
 # ── Executor ──────────────────────────────────────────────────────────────────
@@ -193,8 +195,13 @@ class OrderExecutor:
             if decision.direction == "SELL":
                 self._cooldown_exits[decision.ticker] = datetime.now(timezone.utc)
                 self._save_cooldowns()
+
+            # Poll for actual fill price (market orders typically fill within 1s)
+            fill_price = self._poll_fill_price(order_id)
+
             return self._make_result(decision, trade_id, qty=qty,
-                                     status="submitted", order_id=order_id)
+                                     status="submitted", order_id=order_id,
+                                     fill_price=fill_price)
 
         except Exception as exc:
             logger.error(
@@ -336,6 +343,46 @@ class OrderExecutor:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
+    def _poll_fill_price(self, order_id: str, retries: int = 3, delay: float = 1.5) -> float:
+        """Poll Alpaca for the actual fill price of a submitted order."""
+        if not order_id or order_id == "DRY-RUN":
+            return 0.0
+        try:
+            from alpaca.trading.requests import GetOrderByIdRequest
+            client = self._get_client()._trading_client
+            for _ in range(retries):
+                time.sleep(delay)
+                order = client.get_order_by_id(order_id)
+                if order.filled_avg_price is not None:
+                    return float(order.filled_avg_price)
+        except Exception as exc:
+            logger.debug(f"[OrderExecutor] Could not poll fill price for {order_id}: {exc}")
+        return 0.0
+
+    def restore_trailing_stops(self) -> None:
+        """
+        Re-register trailing stops for all currently held Alpaca positions.
+        Called on startup so positions from before a restart are protected.
+        Uses 7% hard stop (ATR=0 triggers the % fallback in register_trailing_stop).
+        """
+        if self.dry_run:
+            return
+        try:
+            positions = self._get_client().get_positions()
+            if positions.empty:
+                return
+            for _, row in positions.iterrows():
+                ticker = row["ticker"]
+                if ticker not in self._trailing_stops:
+                    self.register_trailing_stop(
+                        ticker=ticker,
+                        entry_price=float(row["avg_entry_price"]),
+                        atr=0.0,  # triggers % fallback
+                    )
+            logger.info(f"[OrderExecutor] Restored trailing stops for {len(positions)} positions")
+        except Exception as exc:
+            logger.warning(f"[OrderExecutor] Could not restore trailing stops: {exc}")
+
     def _cooldown_path(self):
         from pathlib import Path
         return Path(self.config.data.storage_path) / "audit" / "cooldowns.json"
@@ -435,6 +482,7 @@ class OrderExecutor:
         status: str = "skipped",
         order_id: str = "",
         error: str = "",
+        fill_price: float = 0.0,
     ) -> OrderResult:
         return OrderResult(
             trade_id=trade_id,
@@ -453,6 +501,7 @@ class OrderExecutor:
             error=error,
             approved=decision.approved,
             block_reason=decision.block_reason,
+            fill_price=fill_price,
         )
 
     def _save_audit(self, results: List[OrderResult]) -> None:
@@ -475,6 +524,7 @@ class OrderExecutor:
                 "error":               r.error,
                 "approved":            r.approved,
                 "block_reason":        r.block_reason,
+                "fill_price":          r.fill_price if r.fill_price else None,
             }
             for r in results
         ]
