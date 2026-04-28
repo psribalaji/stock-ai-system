@@ -76,6 +76,7 @@ class OrderExecutor:
         self._kill_switch_active = False
         self._trailing_stops: dict[str, dict] = {}  # {ticker: {high_water, stop_price, atr}}
         self._take_profits: dict[str, float] = {}   # {ticker: take_profit_price}
+        self._cooldown_exits: dict[str, datetime] = {}  # {ticker: last_sell_time}
 
         mode = "DRY-RUN" if dry_run else self.config.trading.mode.upper()
         logger.info(f"[OrderExecutor] Initialised — mode: {mode}")
@@ -92,6 +93,14 @@ class OrderExecutor:
         Returns:
             List of OrderResult, one per decision.
         """
+        # Deduplicate: one order per ticker+direction per batch (keep highest confidence)
+        seen: dict[tuple, TradeDecision] = {}
+        for d in decisions:
+            key = (d.ticker, d.direction)
+            if key not in seen or d.confidence > seen[key].confidence:
+                seen[key] = d
+        decisions = list(seen.values())
+
         results = []
         submitted_this_batch = set()
         # Sort by confidence descending so the best signal per ticker wins
@@ -181,6 +190,8 @@ class OrderExecutor:
                 f"[OrderExecutor] ORDER SUBMITTED: {decision.direction} "
                 f"{qty:.4f} {decision.ticker} | order_id={order_id}"
             )
+            if decision.direction == "SELL":
+                self._cooldown_exits[decision.ticker] = datetime.now(timezone.utc)
             return self._make_result(decision, trade_id, qty=qty,
                                      status="submitted", order_id=order_id)
 
@@ -342,6 +353,14 @@ class OrderExecutor:
 
         if decision.direction == "BUY" and decision.ticker in held_tickers:
             return f"already holding {decision.ticker} — skipping duplicate BUY"
+
+        if decision.direction == "BUY" and decision.ticker in self._cooldown_exits:
+            from datetime import timedelta
+            elapsed = datetime.now(timezone.utc) - self._cooldown_exits[decision.ticker]
+            cooldown = timedelta(hours=4)
+            if elapsed < cooldown:
+                remaining = int((cooldown - elapsed).total_seconds() / 60)
+                return f"{decision.ticker} in cooldown — {remaining}m until re-entry allowed"
 
         if decision.direction == "SELL" and decision.ticker not in held_tickers:
             return f"no position in {decision.ticker} — skipping SELL (would be short)"
