@@ -76,7 +76,7 @@ class OrderExecutor:
         self._kill_switch_active = False
         self._trailing_stops: dict[str, dict] = {}  # {ticker: {high_water, stop_price, atr}}
         self._take_profits: dict[str, float] = {}   # {ticker: take_profit_price}
-        self._cooldown_exits: dict[str, datetime] = {}  # {ticker: last_sell_time}
+        self._cooldown_exits: dict[str, datetime] = self._load_cooldowns()
 
         mode = "DRY-RUN" if dry_run else self.config.trading.mode.upper()
         logger.info(f"[OrderExecutor] Initialised — mode: {mode}")
@@ -192,6 +192,7 @@ class OrderExecutor:
             )
             if decision.direction == "SELL":
                 self._cooldown_exits[decision.ticker] = datetime.now(timezone.utc)
+                self._save_cooldowns()
             return self._make_result(decision, trade_id, qty=qty,
                                      status="submitted", order_id=order_id)
 
@@ -334,6 +335,31 @@ class OrderExecutor:
         self._take_profits.pop(ticker, None)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
+
+    def _cooldown_path(self):
+        from pathlib import Path
+        return Path(self.config.data.storage_path) / "audit" / "cooldowns.json"
+
+    def _load_cooldowns(self) -> dict[str, datetime]:
+        import json
+        path = self._cooldown_path()
+        if not path.exists():
+            return {}
+        try:
+            raw = json.loads(path.read_text())
+            return {
+                ticker: datetime.fromisoformat(ts)
+                for ticker, ts in raw.items()
+            }
+        except Exception:
+            return {}
+
+    def _save_cooldowns(self) -> None:
+        import json
+        path = self._cooldown_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = {ticker: ts.isoformat() for ticker, ts in self._cooldown_exits.items()}
+        path.write_text(json.dumps(raw))
 
     def _check_position(self, decision: TradeDecision) -> str:
         """
