@@ -65,7 +65,7 @@ risk:
   max_position_pct:    0.05    # Max 5% of portfolio per position
   max_sector_pct:      0.25    # Max 25% in any one sector
   max_crypto_pct:      0.10    # Max 10% total crypto exposure
-  max_open_positions:  5       # Max concurrent open positions
+  max_open_positions:  15      # Max concurrent open positions
   min_confidence:      0.60    # Minimum signal confidence to trade
   stop_loss_pct:       0.07    # Hard stop loss: 7% below entry
   trailing_stop_atr_mult: 2.0  # Trailing stop: 2x ATR below highest price
