@@ -427,6 +427,18 @@ class OrderExecutor:
         if decision.direction == "BUY" and decision.ticker in held_tickers:
             return f"already holding {decision.ticker} — skipping duplicate BUY"
 
+        # Staleness filter: skip BUY if price has moved >2% from signal price
+        if decision.direction == "BUY":
+            try:
+                current = self._get_client().get_latest_price(decision.ticker)
+                if current:
+                    drift = abs(current - decision.entry_price) / decision.entry_price
+                    if drift > 0.02:
+                        return (f"{decision.ticker} price drifted {drift*100:.1f}% from signal "
+                                f"(signal=${decision.entry_price:.2f}, now=${current:.2f}) — stale signal")
+            except Exception:
+                pass
+
         if decision.direction == "BUY" and decision.ticker in self._cooldown_exits:
             from datetime import timedelta
             elapsed = datetime.now(timezone.utc) - self._cooldown_exits[decision.ticker]
@@ -454,6 +466,15 @@ class OrderExecutor:
         mode = self.config.trading.mode
         if mode not in ("paper", "live"):
             return f"unknown trading mode '{mode}'"
+
+        # Block BUYs in first 30 min after market open — opening volatility
+        # causes tight stops to trigger immediately on valid entries
+        if decision.direction == "BUY":
+            from zoneinfo import ZoneInfo
+            from datetime import time as dtime
+            now_et = datetime.now(ZoneInfo("America/New_York")).time()
+            if dtime(9, 30) <= now_et < dtime(10, 0):
+                return "opening range buffer (9:30–10:00 AM ET) — waiting for volatility to settle"
 
         return ""
 
