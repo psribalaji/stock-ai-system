@@ -466,6 +466,10 @@ class TradingScheduler:
         screen them, add candidates, and expire stale ones.
         Only fires during market hours for intraday trigger.
         """
+        if _is_weekend():
+            logger.debug("[Scheduler] discovery_scan skipped — weekend")
+            return
+
         if not _is_market_hours():
             # Allow pre-market (8am) trigger to pass; guard only truly off-hours
             now = datetime.now(ET)
