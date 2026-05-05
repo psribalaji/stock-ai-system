@@ -136,6 +136,63 @@ class BacktestResult:
 
         logger.info(f"[Backtester] Results saved to {out}/")
 
+        # Upload to S3 if configured
+        self._upload_to_s3(out, tag)
+
+    def _upload_to_s3(self, out: Path, tag: str) -> None:
+        """Upload backtest output files to S3 under market-data/backtest/<tag>/."""
+        try:
+            from src.config import get_config
+            from src.secrets import Secrets, _load_dotenv
+            import boto3, os
+            _load_dotenv()
+
+            cfg = get_config()
+            if not cfg.data.sync_to_s3:
+                return
+
+            role_arn = Secrets.aws_role_arn()
+            region   = os.environ.get("AWS_REGION", "us-east-1")
+
+            if role_arn:
+                sts   = boto3.client("sts", region_name=region)
+                creds = sts.assume_role(
+                    RoleArn=role_arn,
+                    RoleSessionName="stockai-backtest-upload",
+                    DurationSeconds=900,
+                )["Credentials"]
+                s3 = boto3.client(
+                    "s3",
+                    region_name=region,
+                    aws_access_key_id=creds["AccessKeyId"],
+                    aws_secret_access_key=creds["SecretAccessKey"],
+                    aws_session_token=creds["SessionToken"],
+                )
+            else:
+                s3 = boto3.client("s3", region_name=region)
+
+            bucket = cfg.data.s3_bucket
+            prefix = cfg.data.s3_prefix.rstrip("/")
+
+            uploaded = 0
+            for fname in [
+                f"equity_{tag}.csv",
+                f"trades_{tag}.csv",
+                f"summary_{tag}.json",
+            ]:
+                local = out / fname
+                if not local.exists():
+                    continue
+                key = f"{prefix}/backtest/{tag}/{fname}"
+                s3.upload_file(str(local), bucket, key)
+                logger.info(f"[Backtester] S3 ↑ s3://{bucket}/{key}")
+                uploaded += 1
+
+            logger.info(f"[Backtester] Uploaded {uploaded} files to S3.")
+
+        except Exception as exc:
+            logger.warning(f"[Backtester] S3 upload failed: {exc}")
+
 
 # ── Backtester ───────────────────────────────────────────────────────────────
 
