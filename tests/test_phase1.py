@@ -616,7 +616,7 @@ class TestRiskManager:
         full_portfolio = PortfolioState(
             total_value_usd=100_000.0,
             cash_usd=50_000.0,
-            open_positions=5,           # at max
+            open_positions=15,          # at max
             crypto_exposure_usd=0.0,
             daily_pnl_pct=-0.005,
             peak_value_usd=105_000.0,

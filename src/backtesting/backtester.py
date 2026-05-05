@@ -43,6 +43,8 @@ class BacktestPosition:
     take_profit: float
     strategy: str
     confidence: float
+    high_water: float = 0.0   # highest price since entry (for trailing stop)
+    atr_trail: float = 0.0    # ATR * multiplier (trailing distance)
 
 
 @dataclass
@@ -445,6 +447,19 @@ class Backtester:
                 stop  = fill * (1 - stop_pct)
                 tp    = fill + rr_ratio * (fill - stop)
 
+                # ATR trailing stop: use ATR from features if available
+                atr_mult = cfg.risk.trailing_stop_atr_mult
+                atr_val = feats.get("atr_14", 0) if ticker in feature_data and today in feature_data[ticker] else 0
+                feats = feature_data.get(ticker, {}).get(today, {})
+                atr_val = float(feats.get("atr_14", 0)) if feats.get("atr_14") else 0
+
+                if atr_val > 0:
+                    trailing_stop = fill - (atr_mult * atr_val)
+                    stop = max(stop, trailing_stop)  # use tighter of hard stop vs trailing
+                    tp = fill + rr_ratio * (fill - stop)
+
+                atr_trail = atr_mult * atr_val if atr_val > 0 else fill * stop_pct
+
                 cash -= fill * quantity
                 positions[ticker] = BacktestPosition(
                     ticker=ticker,
@@ -455,6 +470,8 @@ class Backtester:
                     take_profit=tp,
                     strategy=order["strategy"],
                     confidence=order["confidence"],
+                    high_water=fill,
+                    atr_trail=atr_trail,
                 )
             pending_buys.clear()
 
@@ -465,6 +482,13 @@ class Backtester:
 
                 pos  = positions[ticker]
                 ohlc = day_price[ticker]
+
+                # Trailing stop: update high-water mark and trail stop up
+                if ohlc["high"] > pos.high_water:
+                    pos.high_water = ohlc["high"]
+                    new_stop = pos.high_water - pos.atr_trail
+                    if new_stop > pos.stop_price:
+                        pos.stop_price = new_stop
 
                 # Stop loss: triggered if low breaches stop
                 if ohlc["low"] <= pos.stop_price:
