@@ -84,21 +84,21 @@ class FeatureEngine:
         df["price_vs_sma50"]  = (df["close"] - df["sma_50"])  / df["sma_50"]
         df["price_vs_sma200"] = (df["close"] - df["sma_200"]) / df["sma_200"]
 
-        # Golden cross / death cross (sma_200 is NaN when history < 200 bars — comparisons return False safely)
+        # Golden cross / death cross (sma_200 is NaN when history < 200 bars)
         df["golden_cross"] = (
             (df["sma_50"] > df["sma_200"]) &
             (df["sma_50"].shift(1) <= df["sma_200"].shift(1))
-        ).astype(int)
+        ).fillna(False).astype(int)
         df["death_cross"] = (
             (df["sma_50"] < df["sma_200"]) &
             (df["sma_50"].shift(1) >= df["sma_200"].shift(1))
-        ).astype(int)
+        ).fillna(False).astype(int)
 
         # MA alignment score: +1 for each in order (price > ema21 > sma50 > sma200)
         df["ma_alignment"] = (
-            (df["close"] > df["ema_21"]).astype(int) +
-            (df["ema_21"] > df["sma_50"]).astype(int) +
-            (df["sma_50"] > df["sma_200"]).astype(int)
+            (df["close"] > df["ema_21"]).fillna(False).astype(int) +
+            (df["ema_21"] > df["sma_50"]).fillna(False).astype(int) +
+            (df["sma_50"] > df["sma_200"]).fillna(False).astype(int)
         )
 
         return df
@@ -114,8 +114,8 @@ class FeatureEngine:
         df["rsi_7"]  = ta.rsi(df["close"], length=7)
 
         # RSI signals
-        df["rsi_oversold"]   = (df["rsi_14"] < cfg.rsi_oversold).astype(int)
-        df["rsi_overbought"] = (df["rsi_14"] > cfg.rsi_overbought).astype(int)
+        df["rsi_oversold"]   = (df["rsi_14"] < cfg.rsi_oversold).fillna(False).astype(int)
+        df["rsi_overbought"] = (df["rsi_14"] > cfg.rsi_overbought).fillna(False).astype(int)
 
         # MACD
         macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
@@ -126,11 +126,11 @@ class FeatureEngine:
             df["macd_cross_up"]   = (
                 (df["macd"] > df["macd_signal"]) &
                 (df["macd"].shift(1) <= df["macd_signal"].shift(1))
-            ).astype(int)
+            ).fillna(False).astype(int)
             df["macd_cross_down"] = (
                 (df["macd"] < df["macd_signal"]) &
                 (df["macd"].shift(1) >= df["macd_signal"].shift(1))
-            ).astype(int)
+            ).fillna(False).astype(int)
 
         # Stochastic
         stoch = ta.stoch(df["high"], df["low"], df["close"])
@@ -175,7 +175,7 @@ class FeatureEngine:
         # Volatility regime: is current vol above its 60d average?
         df["high_vol_regime"] = (
             df["hvol_20"] > df["hvol_20"].rolling(60).mean()
-        ).astype(int)
+        ).fillna(False).astype(int)
 
         return df
 
@@ -195,13 +195,13 @@ class FeatureEngine:
         # High volume flag (signal requires this)
         df["high_volume"] = (
             df["vol_ratio"] >= cfg.min_volume_ratio
-        ).astype(int)
+        ).fillna(False).astype(int)
 
         # On Balance Volume
         df["obv"] = ta.obv(df["close"], df["volume"])
 
         # OBV trend (positive = volume confirming price up)
-        df["obv_trend"] = (df["obv"] > df["obv"].rolling(20).mean()).astype(int)
+        df["obv_trend"] = (df["obv"] > df["obv"].rolling(20).mean()).fillna(False).astype(int)
 
         # Volume Price Trend
         try:
@@ -250,7 +250,7 @@ class FeatureEngine:
         )
 
         # Near 52-week high (within 5%)
-        df["near_52w_high"] = (df["dist_from_52w_high"] > -0.05).astype(int)
+        df["near_52w_high"] = (df["dist_from_52w_high"] > -0.05).fillna(False).astype(int)
 
         return df
 
@@ -285,15 +285,15 @@ class FeatureEngine:
         df["bull_regime"] = (
             (df["close"] > df["sma_200"]) &
             (df["hvol_20"] < df["hvol_20"].rolling(60).mean())
-        ).astype(int)
+        ).fillna(False).astype(int)
 
         # Composite regime score 0–5 (higher = more bullish conditions)
         df["regime_score"] = (
-            (df["close"] > df["sma_50"]).astype(int) +
-            (df["close"] > df["sma_200"]).astype(int) +
-            (df["sma_50"] > df["sma_200"]).astype(int) +
-            (df["rsi_14"] > 50).astype(int) +
-            (df["obv_trend"] == 1).astype(int)
+            (df["close"] > df["sma_50"]).fillna(False).astype(int) +
+            (df["close"] > df["sma_200"]).fillna(False).astype(int) +
+            (df["sma_50"] > df["sma_200"]).fillna(False).astype(int) +
+            (df["rsi_14"] > 50).fillna(False).astype(int) +
+            (df["obv_trend"] == 1).fillna(False).astype(int)
         )
 
         return df
