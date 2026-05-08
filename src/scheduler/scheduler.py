@@ -426,13 +426,33 @@ class TradingScheduler:
                 for ticker in tp_triggered:
                     logger.info(f"[Scheduler] Take-profit triggered for {ticker}")
                     price = price_map.get(ticker, 0)
-                    notify(f"{ticker} take-profit hit @ ${price:,.2f}", level="tp", ticker=ticker)
+                    try:
+                        pos = next((p for p in positions if p.symbol == ticker), None)
+                        if pos:
+                            qty = float(pos.qty)
+                            alpaca.submit_market_order(ticker, qty, "sell")
+                            notify(f"🎯 Take-profit hit: SELL {ticker} @ ${price:,.2f}", level="tp", ticker=ticker)
+                        else:
+                            notify(f"{ticker} take-profit triggered @ ${price:,.2f} (no position found)", level="tp", ticker=ticker)
+                    except Exception as sell_exc:
+                        logger.error(f"[Scheduler] Take-profit SELL failed for {ticker}: {sell_exc}")
+                        notify(f"❌ Take-profit SELL failed for {ticker}: {sell_exc}", level="warning", ticker=ticker)
 
                 stop_triggered = self.executor.update_trailing_stops(price_map)
                 for ticker in stop_triggered:
                     logger.info(f"[Scheduler] Trailing stop triggered for {ticker}")
                     price = price_map.get(ticker, 0)
-                    notify(f"{ticker} trailing stop triggered @ ${price:,.2f}", level="stop", ticker=ticker)
+                    try:
+                        pos = next((p for p in positions if p.symbol == ticker), None)
+                        if pos:
+                            qty = float(pos.qty)
+                            alpaca.submit_market_order(ticker, qty, "sell")
+                            notify(f"🛑 Trailing stop hit: SELL {ticker} @ ${price:,.2f}", level="stop", ticker=ticker)
+                        else:
+                            notify(f"{ticker} trailing stop triggered @ ${price:,.2f} (no position found)", level="stop", ticker=ticker)
+                    except Exception as sell_exc:
+                        logger.error(f"[Scheduler] Trailing stop SELL failed for {ticker}: {sell_exc}")
+                        notify(f"❌ Trailing stop SELL failed for {ticker}: {sell_exc}", level="warning", ticker=ticker)
 
         except Exception as exc:
             logger.error(f"[Scheduler] position_check failed: {exc}")
