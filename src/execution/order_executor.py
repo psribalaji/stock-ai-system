@@ -65,6 +65,9 @@ class OrderExecutor:
         dry_run:       If True, log orders but never submit (safe for testing)
     """
 
+    # How long to wait before retrying a failed order (prevents hammering Alpaca)
+    FAILED_ORDER_COOLDOWN_MIN = 60
+
     def __init__(
         self,
         alpaca_client=None,
@@ -79,6 +82,8 @@ class OrderExecutor:
         self._trailing_stops: dict[str, dict] = {}  # {ticker: {high_water, stop_price, atr}}
         self._take_profits: dict[str, float] = {}   # {ticker: take_profit_price}
         self._cooldown_exits: dict[str, datetime] = self._load_cooldowns()
+        # Tracks last failure time per (ticker, direction) to prevent retry storms
+        self._failed_order_times: dict[tuple, datetime] = {}
 
         mode = "DRY-RUN" if dry_run else self.config.trading.mode.upper()
         logger.info(f"[OrderExecutor] Initialised — mode: {mode}")
@@ -204,12 +209,18 @@ class OrderExecutor:
                                      fill_price=fill_price)
 
         except Exception as exc:
+            # Unwrap tenacity RetryError to get the real Alpaca error message
+            real_error = self._unwrap_error(exc)
             logger.error(
                 f"[OrderExecutor] ORDER FAILED: {decision.direction} "
-                f"{decision.ticker}: {exc}"
+                f"{decision.ticker}: {real_error}"
+            )
+            # Record failure time so we don't retry for FAILED_ORDER_COOLDOWN_MIN
+            self._failed_order_times[(decision.ticker, decision.direction)] = (
+                datetime.now(timezone.utc)
             )
             return self._make_result(decision, trade_id, qty=qty,
-                                     status="failed", error=str(exc))
+                                     status="failed", error=real_error)
 
     def activate_kill_switch(self) -> None:
         """
@@ -452,6 +463,22 @@ class OrderExecutor:
 
         return ""
 
+    def _unwrap_error(self, exc: Exception) -> str:
+        """
+        Extract the real error message from a tenacity RetryError.
+        RetryError wraps the last attempt's exception; without unwrapping
+        you only get a useless memory-address string like 'RetryError[<Future at 0x...>]'.
+        """
+        try:
+            from tenacity import RetryError
+            if isinstance(exc, RetryError):
+                underlying = exc.last_attempt.exception()
+                if underlying is not None:
+                    return f"{type(underlying).__name__}: {underlying}"
+        except Exception:
+            pass
+        return str(exc)
+
     def _check_safety(self, decision: TradeDecision) -> str:
         """
         Return a non-empty reason string if the order should be blocked,
@@ -467,14 +494,32 @@ class OrderExecutor:
         if mode not in ("paper", "live"):
             return f"unknown trading mode '{mode}'"
 
+        from zoneinfo import ZoneInfo
+        from datetime import time as dtime
+        now_et = datetime.now(ZoneInfo("America/New_York")).time()
+
+        # Block all orders outside regular market hours (9:30–16:00 ET)
+        # Alpaca rejects market orders after hours; paper mode just queues them
+        # which causes ghost fills at unexpected prices
+        if not (dtime(9, 30) <= now_et < dtime(16, 0)):
+            return f"outside market hours ({now_et.strftime('%H:%M')} ET) — skipping"
+
         # Block BUYs in first 30 min after market open — opening volatility
         # causes tight stops to trigger immediately on valid entries
-        if decision.direction == "BUY":
-            from zoneinfo import ZoneInfo
-            from datetime import time as dtime
-            now_et = datetime.now(ZoneInfo("America/New_York")).time()
-            if dtime(9, 30) <= now_et < dtime(10, 0):
-                return "opening range buffer (9:30–10:00 AM ET) — waiting for volatility to settle"
+        if decision.direction == "BUY" and now_et < dtime(10, 0):
+            return "opening range buffer (9:30–10:00 AM ET) — waiting for volatility to settle"
+
+        # Block orders that recently failed — prevents retry storms
+        from datetime import timedelta
+        key = (decision.ticker, decision.direction)
+        last_fail = self._failed_order_times.get(key)
+        if last_fail:
+            elapsed = datetime.now(timezone.utc) - last_fail
+            cooldown = timedelta(minutes=self.FAILED_ORDER_COOLDOWN_MIN)
+            if elapsed < cooldown:
+                remaining = int((cooldown - elapsed).total_seconds() / 60)
+                return (f"{decision.ticker} {decision.direction} failed recently — "
+                        f"retry blocked for {remaining}m more")
 
         return ""
 
