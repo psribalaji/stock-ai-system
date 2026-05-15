@@ -54,7 +54,7 @@ assets:
     - GS
   crypto:
     - BTC
-    - SOL
+    # SOL removed — Polygon returns no data for it (153d stale), signals unreliable
   # Broad market & sector ETFs — diversify away from single-stock tech concentration
   etfs:
     - SPY     # S&P 500 broad market
