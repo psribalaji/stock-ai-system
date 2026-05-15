@@ -55,6 +55,15 @@ assets:
   crypto:
     - BTC
     - SOL
+  # Broad market & sector ETFs — diversify away from single-stock tech concentration
+  etfs:
+    - SPY     # S&P 500 broad market
+    - GLD     # Gold — hedge against tech sell-offs and inflation
+    - TLT     # 20yr Treasury bonds — flight-to-safety hedge
+    - XLV     # Healthcare sector ETF
+    - XLE     # Energy sector ETF
+    - XLI     # Industrials/Defence sector ETF
+    - XLF     # Financials sector ETF
   watchlist:                   # Signals computed but no orders placed
     - ASML
     - ARM

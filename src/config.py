@@ -20,15 +20,16 @@ class TradingConfig(BaseModel):
 class AssetsConfig(BaseModel):
     stocks: List[str] = []
     crypto: List[str] = []
+    etfs: List[str] = []
     watchlist: List[str] = []
 
     @property
     def all_tradeable(self) -> List[str]:
-        return self.stocks + self.crypto
+        return self.stocks + self.crypto + self.etfs
 
     @property
     def all_symbols(self) -> List[str]:
-        return self.stocks + self.crypto + self.watchlist
+        return self.stocks + self.crypto + self.etfs + self.watchlist
 
 class RiskConfig(BaseModel):
     max_position_pct: float = 0.05
