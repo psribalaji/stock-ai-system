@@ -108,6 +108,30 @@ class OrderExecutor:
                 seen[key] = d
         decisions = list(seen.values())
 
+        # Strategy conflict resolution: suppress mean_reversion SELL when any
+        # directional strategy (trend_following / volatility_breakout) says BUY on
+        # the same ticker. Mean_reversion is a short-term oscillation signal; if the
+        # broader trend strategies disagree, honoring the sell churns the position
+        # and re-incurs spread/slippage on what is likely a valid uptrend.
+        directional_buys = {
+            d.ticker for d in decisions
+            if d.direction == "BUY" and d.strategy in ("trend_following", "volatility_breakout")
+        }
+        suppressed: set[tuple] = set()
+        for d in decisions:
+            if (d.direction == "SELL"
+                    and d.strategy == "mean_reversion"
+                    and d.ticker in directional_buys):
+                suppressed.add((d.ticker, d.direction, d.strategy))
+                logger.info(
+                    f"[OrderExecutor] SUPPRESSED mean_reversion SELL for {d.ticker} "
+                    f"— directional BUY is active (trend takes priority over oscillation)"
+                )
+        decisions = [
+            d for d in decisions
+            if (d.ticker, d.direction, d.strategy) not in suppressed
+        ]
+
         results = []
         submitted_this_batch = set()
         # Sort by confidence descending so the best signal per ticker wins
