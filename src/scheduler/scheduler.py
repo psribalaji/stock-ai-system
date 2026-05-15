@@ -258,6 +258,36 @@ class TradingScheduler:
             except Exception:
                 pass
 
+        # ── Staleness audit: alert on any ticker still stale after sync ──────
+        # This catches silent failures where Alpaca returns 0 rows but no error.
+        try:
+            import pandas as pd
+            from datetime import date as _date
+            stale_threshold_days = 3  # allow weekends (Sat+Sun = 2 days gap)
+            stale_after_sync = []
+            for ticker in tickers:
+                df = self.store.load_ohlcv(ticker)
+                if df.empty:
+                    stale_after_sync.append(f"{ticker}(no data)")
+                    continue
+                latest = pd.to_datetime(df["timestamp"]).max().date()
+                days_old = (_date.today() - latest).days
+                if days_old > stale_threshold_days:
+                    stale_after_sync.append(f"{ticker}({days_old}d)")
+            if stale_after_sync:
+                msg = (f"⚠️ DATA STALENESS ALERT: {len(stale_after_sync)} tickers still stale after sync — "
+                       f"signals will use old prices!\n{', '.join(stale_after_sync)}")
+                logger.error(f"[Scheduler] {msg}")
+                try:
+                    from src.notifications import notify
+                    notify(msg, level="critical")
+                except Exception:
+                    pass
+            else:
+                logger.info("[Scheduler] Staleness audit passed — all tickers fresh")
+        except Exception as exc:
+            logger.warning(f"[Scheduler] Staleness audit failed: {exc}")
+
         # Notify sync results
         try:
             from src.notifications import notify
