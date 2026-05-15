@@ -68,7 +68,7 @@ risk:
   max_open_positions:  15      # Max concurrent open positions
   min_confidence:      0.60    # Minimum signal confidence to trade
   stop_loss_pct:       0.07    # Hard stop loss: 7% below entry
-  trailing_stop_atr_mult: 2.0  # Trailing stop: 2x ATR below highest price
+  trailing_stop_atr_mult: 3.0  # Trailing stop: 3x ATR below highest price
   reward_risk_ratio:     2.0  # Take profit at 2x the risk (entry - stop)
   daily_loss_limit:    0.02    # Circuit breaker: 2% daily loss
   max_drawdown_pct:    0.15    # Kill switch: 15% peak-to-trough

@@ -79,7 +79,7 @@ class OrderExecutor:
         self.store    = store or ParquetStore(self.config.data.storage_path)
         self.dry_run  = dry_run
         self._kill_switch_active = False
-        self._trailing_stops: dict[str, dict] = {}  # {ticker: {high_water, stop_price, atr}}
+        self._trailing_stops: dict[str, dict] = self._load_trailing_stops()
         self._take_profits: dict[str, float] = {}   # {ticker: take_profit_price}
         self._cooldown_exits: dict[str, datetime] = self._load_cooldowns()
         # Tracks last failure time per (ticker, direction) to prevent retry storms
@@ -253,6 +253,7 @@ class OrderExecutor:
             "stop_price": stop_price,
             "atr": atr,
         }
+        self._save_trailing_stops()
         logger.info(
             f"[OrderExecutor] Trailing stop registered for {ticker}: "
             f"entry=${entry_price:.2f}, stop=${stop_price:.2f}, ATR=${atr:.2f}"
@@ -279,6 +280,7 @@ class OrderExecutor:
             if price > state["high_water"]:
                 state["high_water"] = price
                 state["stop_price"] = price - (mult * state["atr"])
+                self._save_trailing_stops()
                 logger.debug(
                     f"[OrderExecutor] Trailing stop raised for {ticker}: "
                     f"high=${price:.2f}, new_stop=${state['stop_price']:.2f}"
@@ -295,6 +297,8 @@ class OrderExecutor:
         # Remove triggered tickers
         for ticker in triggered:
             del self._trailing_stops[ticker]
+        if triggered:
+            self._save_trailing_stops()
 
         return triggered
 
@@ -305,6 +309,7 @@ class OrderExecutor:
     def remove_trailing_stop(self, ticker: str) -> None:
         """Remove trailing stop tracking for a ticker (e.g. after manual sell)."""
         self._trailing_stops.pop(ticker, None)
+        self._save_trailing_stops()
 
     # ── Take-profit management ────────────────────────────────────────────────
 
@@ -372,9 +377,12 @@ class OrderExecutor:
 
     def restore_trailing_stops(self) -> None:
         """
-        Re-register trailing stops for all currently held Alpaca positions.
-        Called on startup so positions from before a restart are protected.
-        Uses 7% hard stop (ATR=0 triggers the % fallback in register_trailing_stop).
+        Re-register trailing stops for all currently held Alpaca positions on startup.
+
+        Priority order per ticker:
+        1. Already in _trailing_stops (loaded from disk) — keep as-is, high-water preserved.
+        2. Not on disk — fetch recent bars to compute ATR, use current price as high_water
+           (better than entry price which could be stale by months).
         """
         if self.dry_run:
             return
@@ -382,17 +390,76 @@ class OrderExecutor:
             positions = self._get_client().get_positions()
             if positions.empty:
                 return
+
+            restored = skipped = 0
             for _, row in positions.iterrows():
                 ticker = row["ticker"]
-                if ticker not in self._trailing_stops:
-                    self.register_trailing_stop(
-                        ticker=ticker,
-                        entry_price=float(row["avg_entry_price"]),
-                        atr=0.0,  # triggers % fallback
-                    )
-            logger.info(f"[OrderExecutor] Restored trailing stops for {len(positions)} positions")
+                if ticker in self._trailing_stops:
+                    skipped += 1  # disk state is current — nothing to do
+                    continue
+
+                # Fetch recent bars to get ATR; fall back to hard stop if unavailable
+                atr = 0.0
+                high_water = float(row["current_price"])
+                try:
+                    bars = self._get_client().get_recent_bars(ticker, days=20)
+                    if not bars.empty and len(bars) >= 14:
+                        h = bars["high"]
+                        l = bars["low"]
+                        c = bars["close"]
+                        tr = pd.concat(
+                            [h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1
+                        ).max(axis=1)
+                        atr = float(tr.rolling(14).mean().iloc[-1])
+                        high_water = float(bars["high"].max())  # real high-water from bars
+                except Exception:
+                    pass
+
+                mult = self.config.risk.trailing_stop_atr_mult
+                if atr > 0:
+                    stop = high_water - mult * atr
+                else:
+                    stop = float(row["avg_entry_price"]) * (1 - self.config.risk.stop_loss_pct)
+
+                self._trailing_stops[ticker] = {
+                    "high_water": high_water,
+                    "stop_price": stop,
+                    "atr": atr,
+                }
+                restored += 1
+                logger.info(
+                    f"[OrderExecutor] Restored stop for {ticker}: "
+                    f"high_water=${high_water:.2f}, stop=${stop:.2f}, ATR=${atr:.2f}"
+                )
+
+            self._save_trailing_stops()
+            logger.info(
+                f"[OrderExecutor] Trailing stops: {skipped} from disk, {restored} rebuilt"
+            )
         except Exception as exc:
             logger.warning(f"[OrderExecutor] Could not restore trailing stops: {exc}")
+
+    def _trailing_stops_path(self):
+        from pathlib import Path
+        return Path(self.config.data.storage_path) / "audit" / "trailing_stops.json"
+
+    def _load_trailing_stops(self) -> dict[str, dict]:
+        """Load persisted trailing stop state from disk."""
+        import json
+        path = self._trailing_stops_path()
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+
+    def _save_trailing_stops(self) -> None:
+        """Persist trailing stop state to disk so restarts don't lose high-water marks."""
+        import json
+        path = self._trailing_stops_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._trailing_stops))
 
     def _cooldown_path(self):
         from pathlib import Path
