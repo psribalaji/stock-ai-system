@@ -436,6 +436,18 @@ class TradingScheduler:
                             f"({unrealized_pct*100:.1f}%)",
                             level="stop", ticker=ticker,
                         )
+                        # Set re-entry cooldown so the signal pipeline doesn't
+                        # immediately re-buy the same ticker that just hit its stop.
+                        # job_position_check bypasses OrderExecutor, so we must
+                        # set the cooldown here manually.
+                        if self.executor is not None:
+                            from datetime import timezone as _tz
+                            self.executor._cooldown_exits[ticker] = datetime.now(_tz.utc)
+                            self.executor._save_cooldowns()
+                            logger.info(
+                                f"[Scheduler] Cooldown set for {ticker} — "
+                                f"re-entry blocked for 4h after stop-loss exit"
+                            )
                     except Exception as sell_exc:
                         logger.error(f"[Scheduler] Stop loss SELL failed for {ticker}: {sell_exc}")
 
@@ -636,11 +648,14 @@ class TradingScheduler:
                 peak_value_usd=max(total_value, getattr(self, "_peak_value", total_value)),
             )
         except Exception as exc:
-            logger.warning(f"[Scheduler] Could not build portfolio state: {exc} — using default")
+            logger.warning(f"[Scheduler] Could not build portfolio state: {exc} — using conservative default")
+            # Use max_open_positions as the fallback count so the risk manager
+            # blocks all new BUYs when Alpaca is unreachable. Returning 0 was
+            # causing the system to approve unlimited new positions on API errors.
             return PortfolioState(
                 total_value_usd=100_000.0,
-                cash_usd=100_000.0,
-                open_positions=0,
+                cash_usd=0.0,
+                open_positions=self.config.risk.max_open_positions,
                 crypto_exposure_usd=0.0,
                 daily_pnl_pct=0.0,
                 peak_value_usd=100_000.0,
