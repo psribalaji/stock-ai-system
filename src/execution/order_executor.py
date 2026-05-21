@@ -549,6 +549,19 @@ class OrderExecutor:
                 remaining = int((cooldown - elapsed).total_seconds() / 60)
                 return f"{decision.ticker} in cooldown — {remaining}m until re-entry allowed"
 
+            # Confidence penalty window: ticker was stopped in last 30 days.
+            # Require higher confidence to re-enter — filters borderline signals
+            # on tickers that already proved they can go against us.
+            penalty_window = timedelta(days=30)
+            if elapsed < penalty_window:
+                required = self.config.risk.min_confidence + 0.10  # e.g. 0.60 → 0.70
+                if decision.confidence < required:
+                    return (
+                        f"{decision.ticker} stopped out {int(elapsed.days)}d ago — "
+                        f"confidence {decision.confidence:.2f} below re-entry bar "
+                        f"({required:.2f} required for 30d after a stop)"
+                    )
+
         if decision.direction == "SELL" and decision.ticker not in held_tickers:
             return f"no position in {decision.ticker} — skipping SELL (would be short)"
 
