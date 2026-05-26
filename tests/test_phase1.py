@@ -1075,19 +1075,19 @@ class TestLLMAnalysisService:
     def test_build_prompt_contains_ticker(self, scored_buy):
         """Prompt should contain the ticker name."""
         from src.llm.llm_analysis_service import LLMAnalysisService
-        prompt = LLMAnalysisService._build_prompt(scored_buy, None)
+        prompt = LLMAnalysisService._build_prompt(scored_buy, None, None, None)
         assert "TEST" in prompt
 
     def test_build_prompt_contains_direction(self, scored_buy):
         """Prompt should contain the signal direction."""
         from src.llm.llm_analysis_service import LLMAnalysisService
-        prompt = LLMAnalysisService._build_prompt(scored_buy, None)
+        prompt = LLMAnalysisService._build_prompt(scored_buy, None, None, None)
         assert "BUY" in prompt
 
     def test_build_prompt_with_news(self, scored_buy):
         """Prompt with news should include news text."""
         from src.llm.llm_analysis_service import LLMAnalysisService
-        prompt = LLMAnalysisService._build_prompt(scored_buy, "Strong earnings report")
+        prompt = LLMAnalysisService._build_prompt(scored_buy, "Strong earnings report", None, None)
         assert "Strong earnings report" in prompt
 
 
