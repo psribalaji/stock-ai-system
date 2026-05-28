@@ -494,7 +494,7 @@ class TradingScheduler:
                 from src.notifications import notify
                 for alert in report.alerts:
                     level = "critical" if alert.severity == "CRITICAL" else "warning"
-                    notify(f"Drift: {alert.name} — {alert.message}", level=level)
+                    notify(f"Drift: {alert.alert_type} — {alert.message}", level=level)
 
             if self.on_drift:
                 self.on_drift(report)
@@ -630,14 +630,22 @@ class TradingScheduler:
             else:
                 crypto_exposure = 0.0
 
-            # Daily P&L from Alpaca portfolio history
+            # Daily P&L and true peak from Alpaca portfolio history
             daily_pnl_pct = 0.0
+            peak_value = total_value
             try:
-                history = alpaca._trading_client.get_portfolio_history()
+                from alpaca.trading.requests import GetPortfolioHistoryRequest
+                history = alpaca._trading_client.get_portfolio_history(
+                    GetPortfolioHistoryRequest(period="1M", timeframe="1D")
+                )
+                if history and history.equity:
+                    valid_equity = [e for e in history.equity if e and e > 0]
+                    if valid_equity:
+                        peak_value = max(valid_equity)
                 if history and history.profit_loss_pct and len(history.profit_loss_pct) > 0:
                     daily_pnl_pct = float(history.profit_loss_pct[-1]) or 0.0
-            except Exception:
-                pass
+            except Exception as _hist_exc:
+                logger.debug(f"[Scheduler] Could not fetch portfolio history for peak: {_hist_exc}")
 
             return PortfolioState(
                 total_value_usd=total_value,
@@ -645,7 +653,7 @@ class TradingScheduler:
                 open_positions=open_count,
                 crypto_exposure_usd=crypto_exposure,
                 daily_pnl_pct=daily_pnl_pct,
-                peak_value_usd=max(total_value, getattr(self, "_peak_value", total_value)),
+                peak_value_usd=max(peak_value, total_value),
             )
         except Exception as exc:
             logger.warning(f"[Scheduler] Could not build portfolio state: {exc} — using conservative default")
