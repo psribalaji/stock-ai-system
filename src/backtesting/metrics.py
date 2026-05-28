@@ -199,6 +199,46 @@ def format_report(
     return "\n".join(lines)
 
 
+def consecutive_losses(pnl_series: list[float]) -> dict[str, Any]:
+    """
+    Compute current and worst-ever consecutive losing streak.
+
+    Args:
+        pnl_series: P&L fractions in chronological order, e.g. [0.02, -0.01, 0.03]
+
+    Returns:
+        current_streak: losses in a row right now
+        max_streak:     worst streak ever in the series
+        last_10:        last 10 pnl values for sparkline display
+        alert:          True when current_streak >= 3 (pause and review)
+    """
+    if not pnl_series:
+        return {"current_streak": 0, "max_streak": 0, "last_10": [], "alert": False}
+
+    max_streak = 0
+    run = 0
+    for pnl in pnl_series:
+        if pnl < 0:
+            run += 1
+            max_streak = max(max_streak, run)
+        else:
+            run = 0
+
+    current_streak = 0
+    for pnl in reversed(pnl_series):
+        if pnl < 0:
+            current_streak += 1
+        else:
+            break
+
+    return {
+        "current_streak": current_streak,
+        "max_streak": max_streak,
+        "last_10": pnl_series[-10:],
+        "alert": current_streak >= 3,
+    }
+
+
 def _empty_metrics() -> dict[str, Any]:
     return {k: 0.0 for k in [
         "cagr", "sharpe", "sortino", "max_drawdown", "calmar",

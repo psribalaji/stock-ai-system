@@ -235,6 +235,35 @@ class AlpacaClient:
         self._trading_client.submit_order(stop_order)
         logger.info(f"Stop loss attached: {ticker} @ ${stop_price:.2f}")
 
+    def get_last_filled_sell(self, ticker: str) -> Optional[float]:
+        """
+        Return the fill price of the most recently filled SELL order for ticker.
+        Looks back up to 14 days. Returns None if nothing found.
+        """
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        import datetime as _dt
+
+        try:
+            req = GetOrdersRequest(
+                status=QueryOrderStatus.CLOSED,
+                symbols=[ticker],
+                after=_dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=14),
+                limit=20,
+            )
+            orders = self._trading_client.get_orders(filter=req)
+            filled_sells = [
+                o for o in orders
+                if str(o.side).upper() in ("SELL", "ORDERSIDE.SELL")
+                and o.filled_avg_price is not None
+            ]
+            if filled_sells:
+                filled_sells.sort(key=lambda o: o.filled_at or o.created_at, reverse=True)
+                return float(filled_sells[0].filled_avg_price)
+        except Exception as exc:
+            logger.warning(f"[AlpacaClient] Could not fetch last filled sell for {ticker}: {exc}")
+        return None
+
     def cancel_all_orders(self) -> None:
         """Cancel all open orders. Used by kill switch."""
         self._trading_client.cancel_orders()

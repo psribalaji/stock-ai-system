@@ -411,11 +411,26 @@ class TradingScheduler:
             from src.notifications import notify
             alpaca = AlpacaClient()
 
+            positions     = alpaca._trading_client.get_all_positions()
+            open_tickers  = {p.symbol for p in positions}
+            stop_pct      = self.config.risk.stop_loss_pct  # 0.07
+
+            # ── Detect broker-closed positions (Alpaca filled a stop/TP bracket) ──
+            # Any ticker with an open audit BUY that's no longer in Alpaca positions
+            # was closed by the broker — fetch the fill price and write the exit.
+            try:
+                audit_open = self.store.get_open_trade_tickers()
+                for ticker in audit_open - open_tickers:
+                    exit_price = alpaca.get_last_filled_sell(ticker)
+                    if exit_price:
+                        self.store.close_open_trade(ticker, exit_price, "broker_closed")
+                        logger.info(f"[Scheduler] Broker-closed exit written for {ticker} @ ${exit_price:.2f}")
+            except Exception as _bc_exc:
+                logger.debug(f"[Scheduler] Broker-closed check failed: {_bc_exc}")
+
             # ── Hard stop loss: check ALL held positions regardless of memory state ──
             # This catches positions that were opened before a restart or that errored
             # during order submission but still filled on Alpaca.
-            positions = alpaca._trading_client.get_all_positions()
-            stop_pct = self.config.risk.stop_loss_pct  # 0.07
             for p in positions:
                 ticker = p.symbol
                 unrealized_pct = float(p.unrealized_plpc)  # e.g. -0.087 = -8.7%
@@ -427,7 +442,6 @@ class TradingScheduler:
                         f"down {unrealized_pct*100:.1f}% "
                         f"(entry=${entry_price:.2f}, now=${current_price:.2f})"
                     )
-                    # Submit market sell
                     try:
                         qty = float(p.qty)
                         alpaca.submit_market_order(ticker, qty, "sell")
@@ -436,10 +450,7 @@ class TradingScheduler:
                             f"({unrealized_pct*100:.1f}%)",
                             level="stop", ticker=ticker,
                         )
-                        # Set re-entry cooldown so the signal pipeline doesn't
-                        # immediately re-buy the same ticker that just hit its stop.
-                        # job_position_check bypasses OrderExecutor, so we must
-                        # set the cooldown here manually.
+                        self.store.close_open_trade(ticker, current_price, "stop_loss")
                         if self.executor is not None:
                             from datetime import timezone as _tz
                             self.executor._cooldown_exits[ticker] = datetime.now(_tz.utc)
@@ -469,12 +480,16 @@ class TradingScheduler:
                     logger.info(f"[Scheduler] Take-profit triggered for {ticker}")
                     price = price_map.get(ticker, 0)
                     notify(f"{ticker} take-profit hit @ ${price:,.2f}", level="tp", ticker=ticker)
+                    if price:
+                        self.store.close_open_trade(ticker, price, "take_profit")
 
                 stop_triggered = self.executor.update_trailing_stops(price_map)
                 for ticker in stop_triggered:
                     logger.info(f"[Scheduler] Trailing stop triggered for {ticker}")
                     price = price_map.get(ticker, 0)
                     notify(f"{ticker} trailing stop triggered @ ${price:,.2f}", level="stop", ticker=ticker)
+                    if price:
+                        self.store.close_open_trade(ticker, price, "trailing_stop")
 
         except Exception as exc:
             logger.error(f"[Scheduler] position_check failed: {exc}")

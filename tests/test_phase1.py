@@ -798,17 +798,17 @@ class TestRiskManager:
             assert isinstance(decision.risk_notes, list)
 
     def test_trailing_stop_computed_from_atr(self, rm, scored_buy, healthy_portfolio):
-        """When ATR is provided, trailing stop = entry - (2 * ATR)."""
+        """When ATR is provided, trailing stop = entry - (3 * ATR) per config."""
         decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST", atr_value=4.5)
         assert decision.approved is True
-        assert abs(decision.trailing_stop_price - (100.0 - 2.0 * 4.5)) < 0.01
+        assert abs(decision.trailing_stop_price - (100.0 - 3.0 * 4.5)) < 0.01
         assert decision.trailing_stop_atr == 4.5
 
     def test_trailing_stop_uses_tighter_stop(self, rm, scored_buy, healthy_portfolio):
         """Effective stop should be the tighter of hard stop and trailing stop."""
-        # Hard stop = 100 * 0.93 = 93. Trailing = 100 - 2*2 = 96. Trailing is tighter.
+        # Hard stop = 100 * 0.93 = 93. Trailing = 100 - 3*2 = 94. Trailing is tighter.
         decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST", atr_value=2.0)
-        assert decision.stop_loss_price == 100.0 - (2.0 * 2.0)  # 96.0
+        assert decision.stop_loss_price == 100.0 - (3.0 * 2.0)  # 94.0
 
     def test_trailing_stop_falls_back_without_atr(self, rm, scored_buy, healthy_portfolio):
         """Without ATR, trailing stop equals hard stop."""
@@ -831,7 +831,7 @@ class TestOrderExecutorTrailingStop:
         state = executor.get_trailing_stop("NVDA")
         assert state is not None
         assert state["high_water"] == 120.0
-        assert abs(state["stop_price"] - (120.0 - 2.0 * 4.5)) < 0.01
+        assert abs(state["stop_price"] - (120.0 - 3.0 * 4.5)) < 0.01
 
     def test_trailing_stop_trails_up(self, executor):
         executor.register_trailing_stop("NVDA", entry_price=120.0, atr=4.5)
@@ -839,7 +839,7 @@ class TestOrderExecutorTrailingStop:
         assert triggered == []
         state = executor.get_trailing_stop("NVDA")
         assert state["high_water"] == 135.0
-        assert abs(state["stop_price"] - (135.0 - 2.0 * 4.5)) < 0.01
+        assert abs(state["stop_price"] - (135.0 - 3.0 * 4.5)) < 0.01
 
     def test_trailing_stop_never_moves_down(self, executor):
         executor.register_trailing_stop("NVDA", entry_price=120.0, atr=4.5)
@@ -851,8 +851,8 @@ class TestOrderExecutorTrailingStop:
 
     def test_trailing_stop_triggers(self, executor):
         executor.register_trailing_stop("NVDA", entry_price=120.0, atr=4.5)
-        executor.update_trailing_stops({"NVDA": 148.0})  # new high
-        triggered = executor.update_trailing_stops({"NVDA": 138.0})  # below 148 - 9 = 139
+        executor.update_trailing_stops({"NVDA": 148.0})  # new high → stop = 148 - 3*4.5 = 134.5
+        triggered = executor.update_trailing_stops({"NVDA": 134.0})  # below 134.5 → triggers
         assert "NVDA" in triggered
         assert executor.get_trailing_stop("NVDA") is None  # removed after trigger
 
