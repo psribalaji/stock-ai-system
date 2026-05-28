@@ -11,6 +11,7 @@ Produces a list of TradeDecision objects — one per approved signal.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -149,6 +150,12 @@ class DecisionEngine:
             Combined list of approved TradeDecision objects.
         """
         all_decisions: List[TradeDecision] = []
+        # Track BUYs approved so far this batch so the position-limit check
+        # sees an up-to-date count for each subsequent ticker. Without this,
+        # every ticker in the loop sees the same stale open_positions count
+        # and the system can approve far more than max_open_positions BUYs in
+        # a single cycle.
+        batch_buys = 0
 
         for ticker in tickers:
             df = data_map.get(ticker, pd.DataFrame())
@@ -160,7 +167,12 @@ class DecisionEngine:
                 continue
 
             try:
-                decisions = self.decide(ticker, df, price, portfolio, news)
+                effective_portfolio = dataclasses.replace(
+                    portfolio,
+                    open_positions=portfolio.open_positions + batch_buys,
+                )
+                decisions = self.decide(ticker, df, price, effective_portfolio, news)
+                batch_buys += sum(1 for d in decisions if d.direction == "BUY")
                 all_decisions.extend(decisions)
             except Exception as exc:
                 logger.error(f"[DecisionEngine] Failed for {ticker}: {exc}")
