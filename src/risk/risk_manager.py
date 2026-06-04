@@ -99,7 +99,7 @@ class RiskManager:
         Returns:
             RiskDecision with approved status, position size, and stop loss.
         """
-        cfg = self.config.risk
+        cfg = self.config.effective_risk
         notes: list[str] = []
 
         # ── 1. Kill switch check ─────────────────────────────────────
@@ -339,8 +339,8 @@ class RiskManager:
         return {
             "paused":  self._paused,
             "killed":  self._killed,
-            "max_position_pct":    self.config.risk.max_position_pct,
-            "max_open_positions":  self.config.risk.max_open_positions,
-            "daily_loss_limit":    self.config.risk.daily_loss_limit,
-            "max_drawdown_pct":    self.config.risk.max_drawdown_pct,
+            "max_position_pct":    self.config.effective_risk.max_position_pct,
+            "max_open_positions":  self.config.effective_risk.max_open_positions,
+            "daily_loss_limit":    self.config.effective_risk.daily_loss_limit,
+            "max_drawdown_pct":    self.config.effective_risk.max_drawdown_pct,
         }

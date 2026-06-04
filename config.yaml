@@ -83,6 +83,21 @@ risk:
   max_drawdown_pct:    0.15    # Kill switch: 15% peak-to-trough
   max_portfolio_corr:  0.70    # Block if avg correlation with held positions > 70%
 
+# ── Live Risk Overrides (used when trading.mode = live) ───────────
+# Tighter guardrails for real-money trading (designed for ~$1k starting capital)
+live_risk:
+  max_position_pct:    0.04    # 4% per position (~$40 on $1k) — smaller bite
+  max_sector_pct:      0.30    # 30% sector cap — fewer positions so slightly more concentration ok
+  max_crypto_pct:      0.10    # Same crypto cap
+  max_open_positions:  5       # 5 concurrent positions max (down from 15)
+  min_confidence:      0.70    # Stricter entry bar — only high-confidence signals
+  stop_loss_pct:       0.06    # 6% stop loss — tighter than paper
+  trailing_stop_atr_mult: 3.0  # Same trailing stop multiplier
+  reward_risk_ratio:     2.0  # Same 2:1 reward-to-risk
+  daily_loss_limit:    0.015   # 1.5% daily loss circuit breaker (~$15 on $1k)
+  max_drawdown_pct:    0.08    # 8% kill switch (~$80 on $1k) — stop before it hurts
+  max_portfolio_corr:  0.70    # Same correlation limit
+
 # ── Signal Detection ──────────────────────────────────────────────
 signals:
   lookback_days:       252     # 1 year of history for pattern matching
@@ -125,8 +140,9 @@ drift:
 # ── Data Sources ─────────────────────────────────────────────────
 data:
   storage_path:        "./data"
-  s3_bucket:           "stock-ai-system-data"   # Your S3 bucket name
+  s3_bucket:           "stock-ai-system-data"   # Paper trading bucket
   s3_prefix:           "market-data"
+  s3_bucket_live:      "stock-ai-system-live"   # Separate bucket for live trades — create before going live
   sync_to_s3:          true
   polygon_timeframe:   "day"   # day | hour | minute
   alpaca_feed:         "iex"   # iex (free) | sip (paid)

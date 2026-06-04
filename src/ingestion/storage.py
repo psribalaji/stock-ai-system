@@ -36,9 +36,9 @@ class ParquetStore:
         from src.config import get_config
         cfg = get_config()
         # sync_to_s3 param overrides config — used by tests to disable S3
-        self._sync   = cfg.data.sync_to_s3 if sync_to_s3 is None else sync_to_s3
-        self._bucket = cfg.data.s3_bucket
-        self._prefix = cfg.data.s3_prefix.rstrip("/")
+        self._sync        = cfg.data.sync_to_s3 if sync_to_s3 is None else sync_to_s3
+        self._bucket      = cfg.s3_bucket_effective   # live bucket when mode=live
+        self._prefix      = cfg.data.s3_prefix.rstrip("/")
         self._s3 = None  # lazy — created on first use
 
     def _init_dirs(self) -> None:
