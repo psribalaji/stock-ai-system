@@ -86,7 +86,7 @@ risk:
 # ── Live Risk Overrides (used when trading.mode = live) ───────────
 # Tighter guardrails for real-money trading (designed for ~$1k starting capital)
 live_risk:
-  max_position_pct:    0.04    # 4% per position (~$40 on $1k) — smaller bite
+  max_position_pct:    0.10    # 10% per position (~$10 on $100) — fractional shares
   max_sector_pct:      0.30    # 30% sector cap — fewer positions so slightly more concentration ok
   max_crypto_pct:      0.10    # Same crypto cap
   max_open_positions:  5       # 5 concurrent positions max (down from 15)
