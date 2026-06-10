@@ -53,17 +53,30 @@ def _fetch_from_aws(secret_name: str) -> str:
         ) from e
 
 
+def _load_streamlit_secrets() -> None:
+    """Inject Streamlit Cloud secrets into os.environ so get_secret() picks them up."""
+    try:
+        import streamlit as st
+        for key, value in st.secrets.items():
+            if isinstance(value, str):
+                os.environ.setdefault(key, value)
+    except Exception:
+        pass  # Not running in Streamlit — silently skip
+
+
+_load_streamlit_secrets()
+
+
 @lru_cache(maxsize=32)
 def get_secret(env_var: str, aws_secret_name: str | None = None) -> str:
     """
     Get a secret value. Priority order:
-    1. Environment variable (set by .env locally or by system in prod)
+    1. Environment variable / Streamlit Cloud secrets / .env
     2. AWS Secrets Manager (if aws_secret_name provided and env var missing)
 
     Usage:
         api_key = get_secret("ALPACA_API_KEY", "stock-ai/alpaca-api-key")
     """
-    # Try env var first (works both locally via .env and in prod via systemd env)
     value = os.environ.get(env_var)
     if value:
         logger.debug(f"Secret '{env_var}' loaded from environment")
