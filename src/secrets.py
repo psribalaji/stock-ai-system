@@ -88,10 +88,16 @@ class Secrets:
 
     @staticmethod
     def alpaca_api_key() -> str:
+        from src.config import get_config
+        if get_config().is_live:
+            return get_secret("ALPACA_API_KEY_LIVE", "stock-ai/alpaca-api-key-live")
         return get_secret("ALPACA_API_KEY", "stock-ai/alpaca-api-key")
 
     @staticmethod
     def alpaca_secret_key() -> str:
+        from src.config import get_config
+        if get_config().is_live:
+            return get_secret("ALPACA_SECRET_KEY_LIVE", "stock-ai/alpaca-secret-key-live")
         return get_secret("ALPACA_SECRET_KEY", "stock-ai/alpaca-secret-key")
 
     @staticmethod
