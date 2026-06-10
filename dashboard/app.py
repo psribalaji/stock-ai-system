@@ -149,10 +149,11 @@ def _sidebar() -> str:
     # Account snapshot
     try:
         from src.ingestion.alpaca_client import AlpacaClient
-        _acct  = AlpacaClient()._trading_client.get_account()
-        _total = float(_acct.portfolio_value)
-        _pnl   = _total - 100_000
-        st.sidebar.metric("Portfolio", f"${_total:,.0f}", delta=f"${_pnl:+,.0f}")
+        _acct      = AlpacaClient()._trading_client.get_account()
+        _total     = float(_acct.portfolio_value)
+        _last_eq   = float(_acct.last_equity) if _acct.last_equity else _total
+        _day_pnl   = _total - _last_eq
+        st.sidebar.metric("Portfolio", f"${_total:,.0f}", delta=f"${_day_pnl:+,.0f}")
         st.sidebar.metric("Cash",      f"${float(_acct.cash):,.0f}")
     except Exception:
         st.sidebar.caption(f"Mode: **{cfg.trading.mode.upper()}**")
@@ -386,9 +387,14 @@ def _load_alpaca_portfolio():
 def page_portfolio() -> None:
     st.header("Portfolio")
 
-    STARTING_BALANCE = 100_000.0
-
     acct, positions, history_df, orders_df = _load_alpaca_portfolio()
+
+    # Derive starting balance from oldest equity in history — works for any account size
+    if history_df is not None and not history_df.empty:
+        valid_eq = history_df[history_df["equity"] > 0]["equity"]
+        STARTING_BALANCE = float(valid_eq.iloc[0]) if not valid_eq.empty else None
+    else:
+        STARTING_BALANCE = None
 
     # ── Account summary ───────────────────────────────────────────
     st.subheader("Account Summary")
@@ -397,19 +403,22 @@ def page_portfolio() -> None:
         total_value   = acct["portfolio_value"]
         cash          = acct["cash"]
         invested      = total_value - cash
-        total_pnl     = total_value - STARTING_BALANCE
-        total_pnl_pct = total_pnl / STARTING_BALANCE
+        total_pnl     = total_value - STARTING_BALANCE if STARTING_BALANCE else None
+        total_pnl_pct = total_pnl / STARTING_BALANCE if STARTING_BALANCE else None
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Value",      f"${total_value:,.2f}")
         m2.metric("Cash Available",   f"${cash:,.2f}")
         m3.metric("Invested",         f"${invested:,.2f}")
-        m4.metric(
-            "Total P&L",
-            f"${total_pnl:+,.2f}",
-            delta=f"{total_pnl_pct:+.2%}",
-            delta_color="normal",
-        )
+        if total_pnl is not None:
+            m4.metric(
+                "Total P&L",
+                f"${total_pnl:+,.2f}",
+                delta=f"{total_pnl_pct:+.2%}",
+                delta_color="normal",
+            )
+        else:
+            m4.metric("Total P&L", "—")
         m5.metric("Buying Power",     f"${acct['buying_power']:,.2f}")
     else:
         st.warning("Could not connect to Alpaca — showing cached audit data only.")
@@ -427,8 +436,9 @@ def page_portfolio() -> None:
             fillcolor="rgba(0,200,255,0.08)",
             name="Portfolio Value",
         ))
-        fig_eq.add_hline(y=STARTING_BALANCE, line_dash="dash", line_color="gray",
-                         annotation_text="Starting $100k")
+        if STARTING_BALANCE:
+            fig_eq.add_hline(y=STARTING_BALANCE, line_dash="dash", line_color="gray",
+                             annotation_text=f"Starting ${STARTING_BALANCE:,.0f}")
         fig_eq.update_layout(
             title="Portfolio Value Over Time",
             yaxis_title="Value ($)",

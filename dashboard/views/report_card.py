@@ -18,7 +18,8 @@ if str(_ROOT) not in sys.path:
 
 def render_report_card_page() -> None:
     st.header("📝 Report Card")
-    st.caption("How is the system performing? A summary of paper trading results.")
+    mode = cfg.trading.mode.upper()
+    st.caption(f"How is the system performing? A summary of {mode} trading results.")
 
     from src.ingestion.storage import ParquetStore
     from src.config import get_config
@@ -39,7 +40,7 @@ def render_report_card_page() -> None:
     if audit.empty and signals.empty:
         st.info("No trading data yet. Run the pipeline to start generating your report card.")
         st.markdown("""
-        **What you'll see here after paper trading:**
+        **What you'll see here after trading:**
         - 🏆 Overall grade (A through F)
         - 📊 Key metrics: return, Sharpe, win rate, drawdown
         - 🥇 Best and worst trades
@@ -144,4 +145,4 @@ def render_report_card_page() -> None:
         for r in recs:
             st.markdown(r)
     else:
-        st.success("✅ No issues detected — keep paper trading to build more data!")
+        st.success("✅ No issues detected — keep trading to build more data!")

@@ -58,10 +58,12 @@ def render_pnl_tracker_page() -> None:
             GetPortfolioHistoryRequest(period="1M", timeframe="1D")
         )
         if history and history.equity:
+            valid_equity = [e for e in history.equity if e and e > 0]
+            start_equity = valid_equity[0] if valid_equity else None
             hist_df = pd.DataFrame({
                 "date":   [_dt.datetime.fromtimestamp(t).date() for t in history.timestamp],
                 "equity": history.equity,
-                "pnl":    [e - 100_000 for e in history.equity],
+                "pnl":    [e - start_equity for e in history.equity] if start_equity else history.profit_loss,
             })
             hist_df = hist_df[hist_df["equity"] > 0]
 
@@ -69,6 +71,7 @@ def render_pnl_tracker_page() -> None:
                 current_pnl = hist_df["pnl"].iloc[-1]
                 line_color  = "#00c853" if current_pnl >= 0 else "#ff5252"
                 fill_color  = "rgba(0,200,83,0.1)" if current_pnl >= 0 else "rgba(255,82,82,0.1)"
+                start_label = f"${start_equity:,.0f}" if start_equity else "start"
 
                 fig_cum = go.Figure()
                 fig_cum.add_trace(go.Scatter(
@@ -77,11 +80,11 @@ def render_pnl_tracker_page() -> None:
                     line=dict(color=line_color, width=2),
                     fill="tozeroy",
                     fillcolor=fill_color,
-                    name="P&L vs $100k start",
+                    name=f"P&L vs {start_label} start",
                 ))
                 fig_cum.add_hline(
                     y=0, line_dash="dash", line_color="gray",
-                    annotation_text="Break-even ($100k)",
+                    annotation_text=f"Break-even ({start_label})",
                 )
                 fig_cum.update_layout(
                     title=f"Cumulative P&L — Current: ${current_pnl:+,.2f}",
