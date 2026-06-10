@@ -91,8 +91,8 @@ def _direction_color(direction: str) -> str:
 def _is_market_open() -> bool:
     """Return True if US stock market is currently open (ET timezone)."""
     try:
-        import pytz
-        et  = pytz.timezone("America/New_York")
+        from zoneinfo import ZoneInfo
+        et  = ZoneInfo("America/New_York")
         now = datetime.now(et)
         if now.weekday() >= 5:
             return False
