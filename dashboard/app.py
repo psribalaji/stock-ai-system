@@ -627,7 +627,7 @@ def page_portfolio() -> None:
     if positions is not None and not positions.empty and acct:
         total_value = acct["portfolio_value"]
         num_positions = len(positions)
-        max_positions = cfg.risk.max_open_positions
+        max_positions = cfg.effective_risk.max_open_positions
 
         # Position count
         r1, r2, r3 = st.columns(3)
@@ -638,8 +638,8 @@ def page_portfolio() -> None:
         if "market_value" in positions.columns and total_value > 0:
             largest_pct = positions["market_value"].max() / total_value
             r2.metric("Largest Position", f"{largest_pct:.1%}",
-                      delta=f"{'⚠️ Near limit' if largest_pct > cfg.risk.max_position_pct * 0.8 else '✅ OK'}",
-                      help=f"Limit: {cfg.risk.max_position_pct:.0%}")
+                      delta=f"{'⚠️ Near limit' if largest_pct > cfg.effective_risk.max_position_pct * 0.8 else '✅ OK'}",
+                      help=f"Limit: {cfg.effective_risk.max_position_pct:.0%}")
 
         # Portfolio concentration
         if "market_value" in positions.columns and total_value > 0:
@@ -1034,13 +1034,13 @@ def page_live_trading() -> None:
     st.subheader("Current Config")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Mode",            cfg.trading.mode.upper())
-    col2.metric("Max position",    f"{cfg.risk.max_position_pct:.0%}")
-    col3.metric("Min confidence",  f"{cfg.risk.min_confidence:.0%}")
-    col4.metric("Stop loss",       f"{cfg.risk.stop_loss_pct:.0%}")
+    col2.metric("Max position",    f"{cfg.effective_risk.max_position_pct:.0%}")
+    col3.metric("Min confidence",  f"{cfg.effective_risk.min_confidence:.0%}")
+    col4.metric("Stop loss",       f"{cfg.effective_risk.stop_loss_pct:.0%}")
     col5, col6, col7, col8 = st.columns(4)
-    col5.metric("Max positions",   cfg.risk.max_open_positions)
-    col6.metric("Circuit breaker", f"{cfg.risk.daily_loss_limit:.0%} daily loss")
-    col7.metric("Kill switch",     f"{cfg.risk.max_drawdown_pct:.0%} drawdown")
+    col5.metric("Max positions",   cfg.effective_risk.max_open_positions)
+    col6.metric("Circuit breaker", f"{cfg.effective_risk.daily_loss_limit:.0%} daily loss")
+    col7.metric("Kill switch",     f"{cfg.effective_risk.max_drawdown_pct:.0%} drawdown")
     col8.metric("S3 sync",         "ON" if cfg.data.sync_to_s3 else "OFF")
 
 
