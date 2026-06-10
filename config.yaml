@@ -4,7 +4,7 @@
 
 # ── Trading Mode ──────────────────────────────────────────────────
 trading:
-  mode: paper                  # CHANGE TO "live" ONLY after Phase 2 gate passes
+  mode: live                   # LIVE trading — real money, tighter risk rules apply
   broker: alpaca
   timezone: America/New_York
 
