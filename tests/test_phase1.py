@@ -588,13 +588,14 @@ class TestRiskManager:
     def test_position_size_pct(self, rm, scored_buy, healthy_portfolio):
         """Position size should be at most max_position_pct."""
         decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST")
-        assert decision.position_size_pct <= 0.05
+        from src.config import get_config; assert decision.position_size_pct <= get_config().effective_risk.max_position_pct
 
     def test_stop_loss_calculated(self, rm, scored_buy, healthy_portfolio):
-        """Stop loss should be 7% below entry."""
+        """Stop loss should be stop_loss_pct below entry."""
+        from src.config import get_config
         entry = 100.0
         decision = rm.validate(scored_buy, entry, healthy_portfolio, "TEST")
-        expected_stop = entry * (1 - 0.07)
+        expected_stop = entry * (1 - get_config().effective_risk.stop_loss_pct)
         assert abs(decision.stop_loss_price - expected_stop) < 0.01
 
     def test_block_low_confidence(self, rm, healthy_portfolio):
@@ -812,8 +813,9 @@ class TestRiskManager:
 
     def test_trailing_stop_falls_back_without_atr(self, rm, scored_buy, healthy_portfolio):
         """Without ATR, trailing stop equals hard stop."""
+        from src.config import get_config
         decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST", atr_value=0.0)
-        expected_hard = 100.0 * (1 - 0.07)
+        expected_hard = 100.0 * (1 - get_config().effective_risk.stop_loss_pct)
         assert abs(decision.trailing_stop_price - expected_hard) < 0.01
 
 
@@ -989,7 +991,7 @@ class TestDecisionEngine:
         decisions = engine.decide("TEST", sample_ohlcv, 120.0, healthy_portfolio)
         for d in decisions:
             assert d.position_size_usd > 0
-            assert 0 < d.position_size_pct <= 0.05
+            from src.config import get_config; assert 0 < d.position_size_pct <= get_config().effective_risk.max_position_pct
 
     def test_approved_decisions_have_confidence(self, engine, sample_ohlcv, healthy_portfolio):
         """Approved decisions must have confidence >= 0.60."""

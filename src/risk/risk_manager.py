@@ -150,7 +150,11 @@ class RiskManager:
                 f"Confidence {signal.confidence:.3f} < minimum {cfg.min_confidence}"
             )
 
-        # ── 4. Max open positions ─────────────────────────────────────
+        # ── 4. Already holding this ticker ───────────────────────────
+        if signal.direction == "BUY" and ticker in portfolio.held_tickers:
+            return self._block(f"Already holding {ticker} — no pyramid buying")
+
+        # ── 4b. Max open positions ────────────────────────────────────
         if portfolio.open_positions >= cfg.max_open_positions:
             return self._block(
                 f"Max open positions reached ({portfolio.open_positions}/{cfg.max_open_positions})"

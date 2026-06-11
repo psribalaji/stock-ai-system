@@ -634,8 +634,9 @@ class TradingScheduler:
             total_value = account["portfolio_value"]
             cash        = account["cash"]
 
-            # Real open position count from Alpaca
-            open_count = len(positions) if not positions.empty else 0
+            # Real open position count and tickers from Alpaca
+            open_count   = len(positions) if not positions.empty else 0
+            held_tickers = list(positions["ticker"]) if not positions.empty and "ticker" in positions.columns else []
 
             # Crypto exposure: sum market value of BTC/SOL positions
             crypto_tickers = set(self.config.assets.crypto)
@@ -666,6 +667,7 @@ class TradingScheduler:
                 total_value_usd=total_value,
                 cash_usd=cash,
                 open_positions=open_count,
+                held_tickers=held_tickers,
                 crypto_exposure_usd=crypto_exposure,
                 daily_pnl_pct=daily_pnl_pct,
                 peak_value_usd=max(peak_value, total_value),
