@@ -90,7 +90,7 @@ live_risk:
   max_sector_pct:      0.30    # 30% sector cap — fewer positions so slightly more concentration ok
   max_crypto_pct:      0.10    # Same crypto cap
   max_open_positions:  5       # 5 concurrent positions max (down from 15)
-  min_confidence:      0.70    # Stricter entry bar — only high-confidence signals
+  min_confidence:      0.62    # Slightly above paper floor — relaxed until live history builds up
   stop_loss_pct:       0.06    # 6% stop loss — tighter than paper
   trailing_stop_atr_mult: 3.0  # Same trailing stop multiplier
   reward_risk_ratio:     2.0  # Same 2:1 reward-to-risk
