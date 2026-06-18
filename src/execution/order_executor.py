@@ -76,8 +76,8 @@ class OrderExecutor:
         self.store    = store or ParquetStore(self.config.data.storage_path)
         self.dry_run  = dry_run
         self._kill_switch_active = False
-        self._trailing_stops: dict[str, dict] = {}  # {ticker: {high_water, stop_price, atr}}
-        self._take_profits: dict[str, float] = {}   # {ticker: take_profit_price}
+        self._trailing_stops: dict[str, dict] = self._load_trailing_stops()
+        self._take_profits: dict[str, float] = self._load_take_profits()
         self._cooldown_exits: dict[str, datetime] = self._load_cooldowns()
 
         mode = "DRY-RUN" if dry_run else self.config.trading.mode.upper()
@@ -242,6 +242,7 @@ class OrderExecutor:
             "stop_price": stop_price,
             "atr": atr,
         }
+        self._save_trailing_stops()
         logger.info(
             f"[OrderExecutor] Trailing stop registered for {ticker}: "
             f"entry=${entry_price:.2f}, stop=${stop_price:.2f}, ATR=${atr:.2f}"
@@ -259,6 +260,7 @@ class OrderExecutor:
         """
         mult = self.config.risk.trailing_stop_atr_mult
         triggered = []
+        any_trailed = False
         for ticker, state in list(self._trailing_stops.items()):
             price = price_map.get(ticker)
             if price is None:
@@ -268,6 +270,7 @@ class OrderExecutor:
             if price > state["high_water"]:
                 state["high_water"] = price
                 state["stop_price"] = price - (mult * state["atr"])
+                any_trailed = True
                 logger.debug(
                     f"[OrderExecutor] Trailing stop raised for {ticker}: "
                     f"high=${price:.2f}, new_stop=${state['stop_price']:.2f}"
@@ -285,6 +288,9 @@ class OrderExecutor:
         for ticker in triggered:
             del self._trailing_stops[ticker]
 
+        if triggered or any_trailed:
+            self._save_trailing_stops()
+
         return triggered
 
     def get_trailing_stop(self, ticker: str) -> Optional[dict]:
@@ -293,13 +299,16 @@ class OrderExecutor:
 
     def remove_trailing_stop(self, ticker: str) -> None:
         """Remove trailing stop tracking for a ticker (e.g. after manual sell)."""
-        self._trailing_stops.pop(ticker, None)
+        if ticker in self._trailing_stops:
+            del self._trailing_stops[ticker]
+            self._save_trailing_stops()
 
     # ── Take-profit management ────────────────────────────────────────────────
 
     def register_take_profit(self, ticker: str, take_profit_price: float) -> None:
         """Register a take-profit target after a BUY order is submitted."""
         self._take_profits[ticker] = take_profit_price
+        self._save_take_profits()
         logger.info(
             f"[OrderExecutor] Take-profit registered for {ticker}: "
             f"target=${take_profit_price:.2f}"
@@ -331,6 +340,10 @@ class OrderExecutor:
             del self._take_profits[ticker]
             self._trailing_stops.pop(ticker, None)  # clean up trailing stop too
 
+        if triggered:
+            self._save_take_profits()
+            self._save_trailing_stops()
+
         return triggered
 
     def get_take_profit(self, ticker: str) -> Optional[float]:
@@ -339,7 +352,9 @@ class OrderExecutor:
 
     def remove_take_profit(self, ticker: str) -> None:
         """Remove take-profit tracking for a ticker."""
-        self._take_profits.pop(ticker, None)
+        if ticker in self._take_profits:
+            del self._take_profits[ticker]
+            self._save_take_profits()
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -361,9 +376,9 @@ class OrderExecutor:
 
     def restore_trailing_stops(self) -> None:
         """
-        Re-register trailing stops for all currently held Alpaca positions.
-        Called on startup so positions from before a restart are protected.
-        Uses 7% hard stop (ATR=0 triggers the % fallback in register_trailing_stop).
+        Ensure all held Alpaca positions have trailing stop coverage.
+        On startup, persisted stops are already loaded from disk. This method
+        adds fallback stops for any positions not covered (e.g., opened manually).
         """
         if self.dry_run:
             return
@@ -371,6 +386,7 @@ class OrderExecutor:
             positions = self._get_client().get_positions()
             if positions.empty:
                 return
+            new_count = 0
             for _, row in positions.iterrows():
                 ticker = row["ticker"]
                 if ticker not in self._trailing_stops:
@@ -379,7 +395,11 @@ class OrderExecutor:
                         entry_price=float(row["avg_entry_price"]),
                         atr=0.0,  # triggers % fallback
                     )
-            logger.info(f"[OrderExecutor] Restored trailing stops for {len(positions)} positions")
+                    new_count += 1
+            if new_count:
+                logger.info(f"[OrderExecutor] Added fallback trailing stops for {new_count} uncovered positions")
+            logger.info(f"[OrderExecutor] Trailing stops active for {len(self._trailing_stops)} positions "
+                        f"({len(self._trailing_stops) - new_count} restored from disk)")
         except Exception as exc:
             logger.warning(f"[OrderExecutor] Could not restore trailing stops: {exc}")
 
@@ -407,6 +427,50 @@ class OrderExecutor:
         path.parent.mkdir(parents=True, exist_ok=True)
         raw = {ticker: ts.isoformat() for ticker, ts in self._cooldown_exits.items()}
         path.write_text(json.dumps(raw))
+
+    # ── Trailing stop persistence ─────────────────────────────────────────────
+
+    def _trailing_stops_path(self):
+        from pathlib import Path
+        return Path(self.config.data.storage_path) / "state" / "trailing_stops.json"
+
+    def _load_trailing_stops(self) -> dict[str, dict]:
+        import json
+        path = self._trailing_stops_path()
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+
+    def _save_trailing_stops(self) -> None:
+        import json
+        path = self._trailing_stops_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._trailing_stops))
+
+    # ── Take-profit persistence ───────────────────────────────────────────────
+
+    def _take_profits_path(self):
+        from pathlib import Path
+        return Path(self.config.data.storage_path) / "state" / "take_profits.json"
+
+    def _load_take_profits(self) -> dict[str, float]:
+        import json
+        path = self._take_profits_path()
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+
+    def _save_take_profits(self) -> None:
+        import json
+        path = self._take_profits_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._take_profits))
 
     def _check_position(self, decision: TradeDecision) -> str:
         """

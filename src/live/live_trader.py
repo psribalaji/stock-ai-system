@@ -78,7 +78,7 @@ class LiveTrader:
     REQUIRED_MAX_POSITION_PCT: float = 0.05
     REQUIRED_STOP_LOSS_PCT: float = 0.07
     REQUIRED_MIN_CONFIDENCE: float = 0.60
-    REQUIRED_MAX_OPEN_POSITIONS: int = 5
+    REQUIRED_MAX_OPEN_POSITIONS: int = 15
 
     def __init__(self, alpaca_client=None, s3_sync=None):
         """

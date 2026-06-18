@@ -302,19 +302,31 @@ class TradingScheduler:
         data_map: dict  = {}
         price_map: dict = {}
 
+        # Try to get live prices; fall back to stored close if unavailable
+        alpaca = None
+        try:
+            from src.ingestion.alpaca_client import AlpacaClient
+            alpaca = AlpacaClient()
+        except Exception as exc:
+            logger.warning(f"[Scheduler] Could not init Alpaca for live prices: {exc}")
+
         for ticker in tickers:
             df = self.store.load_ohlcv(ticker)
             if df.empty:
                 logger.warning(f"[Scheduler] No OHLCV data for {ticker} — skipping")
                 continue
-            data_map[ticker]  = df
-            price_map[ticker] = float(df["close"].iloc[-1])
+            data_map[ticker] = df
+            live_price = alpaca.get_latest_price(ticker) if alpaca else None
+            price_map[ticker] = live_price if live_price else float(df["close"].iloc[-1])
 
         if not data_map:
             logger.warning("[Scheduler] signal_pipeline: no data available")
             return
 
         portfolio = self._build_portfolio_state()
+        if portfolio is None:
+            logger.error("[Scheduler] signal_pipeline: portfolio state unavailable — skipping cycle")
+            return
 
         try:
             decisions = self.engine.decide_all(
@@ -581,11 +593,13 @@ class TradingScheduler:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _build_portfolio_state(self) -> PortfolioState:
+    def _build_portfolio_state(self) -> Optional[PortfolioState]:
         """
         Build a PortfolioState from live Alpaca data.
         Uses actual positions and account value — not the audit log — so ghost
         positions (filled on Alpaca but errored locally) are always counted.
+
+        Returns None if Alpaca API is unreachable — callers must block new BUYs.
         """
         try:
             from src.ingestion.alpaca_client import AlpacaClient
@@ -617,21 +631,40 @@ class TradingScheduler:
             except Exception:
                 pass
 
+            # Peak value is now tracked by RiskManager — pass current value
+            peak = self.engine.risk.peak_value_usd
+            if total_value > peak:
+                peak = total_value
+
+            # Correlation data: load price history for held tickers
+            held_tickers = []
+            price_data = {}
+            if not positions.empty and "ticker" in positions.columns:
+                held_tickers = positions["ticker"].tolist()
+                for ticker in held_tickers:
+                    df = self.store.load_ohlcv(ticker)
+                    if not df.empty and "close" in df.columns:
+                        price_data[ticker] = df["close"]
+
             return PortfolioState(
                 total_value_usd=total_value,
                 cash_usd=cash,
                 open_positions=open_count,
                 crypto_exposure_usd=crypto_exposure,
                 daily_pnl_pct=daily_pnl_pct,
-                peak_value_usd=max(total_value, getattr(self, "_peak_value", total_value)),
+                peak_value_usd=peak,
+                held_tickers=held_tickers,
+                price_data=price_data,
             )
         except Exception as exc:
-            logger.warning(f"[Scheduler] Could not build portfolio state: {exc} — using default")
-            return PortfolioState(
-                total_value_usd=100_000.0,
-                cash_usd=100_000.0,
-                open_positions=0,
-                crypto_exposure_usd=0.0,
-                daily_pnl_pct=0.0,
-                peak_value_usd=100_000.0,
+            logger.error(
+                f"[Scheduler] Could not build portfolio state: {exc} — "
+                f"BLOCKING all new trades this cycle (fail-closed)"
             )
+            try:
+                from src.notifications import notify
+                notify(f"Portfolio state unavailable: {exc} — trades blocked this cycle",
+                       level="critical")
+            except Exception:
+                pass
+            return None

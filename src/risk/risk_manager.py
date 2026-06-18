@@ -7,7 +7,7 @@ Rules are defined in config.yaml but treated as immutable at runtime.
 Risk rules:
   - Max position size: 5% of portfolio per trade
   - Max crypto exposure: 10% of portfolio total
-  - Max open positions: 5 simultaneously
+  - Max open positions: 15 simultaneously
   - Daily loss circuit breaker: -2% triggers pause
   - Max drawdown kill switch: -15% closes all positions
   - Minimum confidence to trade: 0.60
@@ -15,7 +15,9 @@ Risk rules:
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -74,8 +76,16 @@ class RiskManager:
 
     def __init__(self) -> None:
         self.config = get_config()
-        self._paused = False        # Circuit breaker flag (daily loss)
-        self._killed = False        # Kill switch flag (max drawdown)
+        self._state_path = Path(self.config.data.storage_path) / "state" / "risk_state.json"
+        self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        saved = self._load_state()
+        self._paused = saved.get("paused", False)
+        self._killed = saved.get("killed", False)
+        self._peak_value_usd = saved.get("peak_value_usd", 0.0)
+        if self._killed:
+            logger.critical("[RiskManager] Restored KILL SWITCH state from disk — trading blocked")
+        if self._paused:
+            logger.warning("[RiskManager] Restored CIRCUIT BREAKER state from disk — trading paused")
 
     # ── Main entry point ─────────────────────────────────────────────
 
@@ -106,9 +116,19 @@ class RiskManager:
         if self._killed:
             return self._block("Kill switch active: max drawdown exceeded")
 
-        drawdown = self._calc_drawdown(portfolio)
+        # Update peak value tracking — use the higher of persisted peak and reported peak
+        effective_peak = max(portfolio.peak_value_usd, self._peak_value_usd)
+        if effective_peak > self._peak_value_usd:
+            self._peak_value_usd = effective_peak
+            self._persist_state()
+        elif portfolio.total_value_usd > self._peak_value_usd:
+            self._peak_value_usd = portfolio.total_value_usd
+            self._persist_state()
+
+        drawdown = self._calc_drawdown_from_peak(portfolio.total_value_usd)
         if drawdown >= cfg.max_drawdown_pct:
             self._killed = True
+            self._persist_state()
             logger.critical(
                 f"[RiskManager] KILL SWITCH: drawdown={drawdown:.2%} >= {cfg.max_drawdown_pct:.2%}. "
                 f"All positions should be closed."
@@ -129,6 +149,7 @@ class RiskManager:
 
         if portfolio.daily_pnl_pct <= -cfg.daily_loss_limit:
             self._paused = True
+            self._persist_state()
             logger.warning(
                 f"[RiskManager] CIRCUIT BREAKER: daily P&L={portfolio.daily_pnl_pct:.2%}. "
                 f"Trading paused for the day."
@@ -240,6 +261,7 @@ class RiskManager:
     def reset_daily(self) -> None:
         """Reset daily circuit breaker. Call at start of each trading day."""
         self._paused = False
+        self._persist_state()
         logger.info("[RiskManager] Daily circuit breaker reset")
 
     def reset_kill_switch(self) -> None:
@@ -248,7 +270,13 @@ class RiskManager:
         This is a safeguard — do not automate this.
         """
         self._killed = False
+        self._persist_state()
         logger.warning("[RiskManager] Kill switch manually reset — ensure drawdown is resolved")
+
+    @property
+    def peak_value_usd(self) -> float:
+        """Current tracked peak portfolio value."""
+        return self._peak_value_usd
 
     @property
     def is_paused(self) -> bool:
@@ -262,21 +290,43 @@ class RiskManager:
 
     # ── Helpers ───────────────────────────────────────────────────────
 
-    @staticmethod
-    def _calc_drawdown(portfolio: PortfolioState) -> float:
+    def _calc_drawdown_from_peak(self, current_value: float) -> float:
         """
-        Compute current drawdown from peak.
+        Compute current drawdown from persisted peak.
 
         Args:
-            portfolio: Current portfolio state
+            current_value: Current portfolio total value
 
         Returns:
             Drawdown as positive fraction (e.g. 0.12 = 12% drawdown)
         """
-        if portfolio.peak_value_usd <= 0:
+        if self._peak_value_usd <= 0:
             return 0.0
-        dd = (portfolio.peak_value_usd - portfolio.total_value_usd) / portfolio.peak_value_usd
+        dd = (self._peak_value_usd - current_value) / self._peak_value_usd
         return max(0.0, dd)
+
+    # ── State persistence ─────────────────────────────────────────────
+
+    def _persist_state(self) -> None:
+        """Save kill switch, circuit breaker, and peak value to disk."""
+        state = {
+            "paused": self._paused,
+            "killed": self._killed,
+            "peak_value_usd": self._peak_value_usd,
+        }
+        try:
+            self._state_path.write_text(json.dumps(state))
+        except Exception as exc:
+            logger.error(f"[RiskManager] Failed to persist state: {exc}")
+
+    def _load_state(self) -> dict:
+        """Load persisted state from disk."""
+        if not self._state_path.exists():
+            return {}
+        try:
+            return json.loads(self._state_path.read_text())
+        except Exception:
+            return {}
 
     @staticmethod
     def _avg_correlation(

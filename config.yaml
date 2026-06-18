@@ -170,4 +170,4 @@ discovery:
     - stocks
     - stockmarket
   news_lookback_hours:  48
-  auto_approve:         true    # Auto-approve for paper trading (set false for live)
+  auto_approve:         true    # Safe: screener filters + confidence gate + all risk rules still apply

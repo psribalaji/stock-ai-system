@@ -179,18 +179,20 @@ class AlpacaClient:
         stop_loss_price: Optional[float] = None,
     ) -> dict:
         """
-        Submit a market order with optional stop loss.
+        Submit a market order with mandatory stop loss for BUY orders.
+
+        If stop loss attachment fails on a BUY, the position is immediately
+        closed with a market sell to prevent unprotected exposure.
 
         Args:
             ticker:          Stock symbol
             qty:             Number of shares (fractional supported)
             side:            "buy" or "sell"
-            stop_loss_price: If provided, attaches a stop loss order after the buy fills
+            stop_loss_price: Required for BUY orders — attaches a stop loss after fill
 
         Returns:
             Order details dict
         """
-        # Market order is retried independently — stop loss failure won't re-trigger it
         order = self._submit_market_order_only(ticker, qty, side)
         logger.info(
             f"Order submitted: {side.upper()} {qty} {ticker} "
@@ -207,16 +209,26 @@ class AlpacaClient:
             "paper":     self.is_paper,
         }
 
-        # Attach stop loss separately — failure here won't retry the market order
         if stop_loss_price and side.lower() == "buy":
             try:
                 self._attach_stop_loss(ticker, qty, stop_loss_price)
                 result["stop_loss_price"] = stop_loss_price
             except Exception as exc:
-                logger.warning(
-                    f"Stop loss attachment failed for {ticker} "
-                    f"(order {order.id} still submitted): {exc}"
+                logger.error(
+                    f"CRITICAL: Stop loss attachment failed for {ticker} "
+                    f"(order {order.id}) — closing position to prevent unprotected exposure: {exc}"
                 )
+                try:
+                    self._submit_market_order_only(ticker, qty, "sell")
+                    result["status"] = "closed_no_stop"
+                    result["error"] = f"Stop loss failed, position closed: {exc}"
+                except Exception as sell_exc:
+                    logger.critical(
+                        f"EMERGENCY: Could not close unprotected position {ticker}: {sell_exc}. "
+                        f"MANUAL INTERVENTION REQUIRED."
+                    )
+                    result["status"] = "unprotected"
+                    result["error"] = f"Stop loss AND close both failed: {exc} / {sell_exc}"
 
         return result
 
