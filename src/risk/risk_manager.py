@@ -15,6 +15,9 @@ Risk rules:
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from dataclasses import dataclass
 from typing import Optional
 
@@ -74,8 +77,14 @@ class RiskManager:
 
     def __init__(self) -> None:
         self.config = get_config()
-        self._paused = False        # Circuit breaker flag (daily loss)
-        self._killed = False        # Kill switch flag (max drawdown)
+        state = self._load_state()
+        self._paused = state.get("paused", False)
+        self._killed = state.get("killed", False)
+        self._peak_value_usd = state.get("peak_value_usd", 0.0)
+        if self._killed:
+            logger.warning("[RiskManager] Restored in KILLED state from persisted state")
+        if self._paused:
+            logger.warning("[RiskManager] Restored in PAUSED state from persisted state")
 
     # ── Main entry point ─────────────────────────────────────────────
 
@@ -106,9 +115,16 @@ class RiskManager:
         if self._killed:
             return self._block("Kill switch active: max drawdown exceeded")
 
-        drawdown = self._calc_drawdown(portfolio)
+        # Update persisted peak value
+        effective_peak = max(portfolio.peak_value_usd, self._peak_value_usd)
+        if effective_peak > self._peak_value_usd:
+            self._peak_value_usd = effective_peak
+            self._persist_state()
+
+        drawdown = self._calc_drawdown_from_peak(portfolio.total_value_usd, self._peak_value_usd)
         if drawdown >= cfg.max_drawdown_pct:
             self._killed = True
+            self._persist_state()
             logger.critical(
                 f"[RiskManager] KILL SWITCH: drawdown={drawdown:.2%} >= {cfg.max_drawdown_pct:.2%}. "
                 f"All positions should be closed."
@@ -129,6 +145,7 @@ class RiskManager:
 
         if portfolio.daily_pnl_pct <= -cfg.daily_loss_limit:
             self._paused = True
+            self._persist_state()
             logger.warning(
                 f"[RiskManager] CIRCUIT BREAKER: daily P&L={portfolio.daily_pnl_pct:.2%}. "
                 f"Trading paused for the day."
@@ -244,6 +261,7 @@ class RiskManager:
     def reset_daily(self) -> None:
         """Reset daily circuit breaker. Call at start of each trading day."""
         self._paused = False
+        self._persist_state()
         logger.info("[RiskManager] Daily circuit breaker reset")
 
     def reset_kill_switch(self) -> None:
@@ -252,6 +270,7 @@ class RiskManager:
         This is a safeguard — do not automate this.
         """
         self._killed = False
+        self._persist_state()
         logger.warning("[RiskManager] Kill switch manually reset — ensure drawdown is resolved")
 
     @property
@@ -263,6 +282,11 @@ class RiskManager:
     def is_killed(self) -> bool:
         """True if kill switch is active."""
         return self._killed
+
+    @property
+    def peak_value_usd(self) -> float:
+        """Persisted all-time peak portfolio value."""
+        return self._peak_value_usd
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -281,6 +305,35 @@ class RiskManager:
             return 0.0
         dd = (portfolio.peak_value_usd - portfolio.total_value_usd) / portfolio.peak_value_usd
         return max(0.0, dd)
+
+    @staticmethod
+    def _calc_drawdown_from_peak(current_value: float, peak_value: float) -> float:
+        """Compute drawdown from a given peak value."""
+        if peak_value <= 0:
+            return 0.0
+        dd = (peak_value - current_value) / peak_value
+        return max(0.0, dd)
+
+    def _persist_state(self) -> None:
+        """Write kill switch, circuit breaker, and peak value to disk."""
+        path = Path("data/state/risk_state.json")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "paused": self._paused,
+            "killed": self._killed,
+            "peak_value_usd": self._peak_value_usd,
+        }
+        path.write_text(json.dumps(state))
+
+    def _load_state(self) -> dict:
+        """Read persisted state from disk. Returns empty dict if missing."""
+        path = Path("data/state/risk_state.json")
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
 
     @staticmethod
     def _avg_correlation(

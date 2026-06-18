@@ -80,7 +80,7 @@ class OrderExecutor:
         self.dry_run  = dry_run
         self._kill_switch_active = False
         self._trailing_stops: dict[str, dict] = self._load_trailing_stops()
-        self._take_profits: dict[str, float] = {}   # {ticker: take_profit_price}
+        self._take_profits: dict[str, float] = self._load_take_profits()
         self._cooldown_exits: dict[str, datetime] = self._load_cooldowns()
         # Tracks last failure time per (ticker, direction) to prevent retry storms
         self._failed_order_times: dict[tuple, datetime] = {}
@@ -344,6 +344,7 @@ class OrderExecutor:
             f"[OrderExecutor] Take-profit registered for {ticker}: "
             f"target=${take_profit_price:.2f}"
         )
+        self._save_take_profits()
 
     def check_take_profits(self, price_map: dict[str, float]) -> list[str]:
         """
@@ -371,6 +372,10 @@ class OrderExecutor:
             del self._take_profits[ticker]
             self._trailing_stops.pop(ticker, None)  # clean up trailing stop too
 
+        if triggered:
+            self._save_take_profits()
+            self._save_trailing_stops()
+
         return triggered
 
     def get_take_profit(self, ticker: str) -> Optional[float]:
@@ -380,6 +385,7 @@ class OrderExecutor:
     def remove_take_profit(self, ticker: str) -> None:
         """Remove take-profit tracking for a ticker."""
         self._take_profits.pop(ticker, None)
+        self._save_take_profits()
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -484,6 +490,28 @@ class OrderExecutor:
         path = self._trailing_stops_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(self._trailing_stops))
+
+    def _take_profits_path(self):
+        from pathlib import Path
+        return Path(self.config.data.storage_path) / "audit" / "take_profits.json"
+
+    def _load_take_profits(self) -> dict[str, float]:
+        """Load persisted take-profit targets from disk."""
+        import json
+        path = self._take_profits_path()
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+
+    def _save_take_profits(self) -> None:
+        """Persist take-profit targets to disk."""
+        import json
+        path = self._take_profits_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._take_profits))
 
     def _cooldown_path(self):
         from pathlib import Path

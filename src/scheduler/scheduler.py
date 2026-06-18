@@ -340,11 +340,25 @@ class TradingScheduler:
             data_map[ticker]  = df
             price_map[ticker] = float(df["close"].iloc[-1])
 
+        # Try to use live prices instead of stale stored close
+        try:
+            from src.ingestion.alpaca_client import AlpacaClient
+            _alpaca_live = AlpacaClient()
+            for ticker in list(price_map.keys()):
+                live_price = _alpaca_live.get_latest_price(ticker)
+                if live_price is not None:
+                    price_map[ticker] = live_price
+        except Exception as _live_exc:
+            logger.debug(f"[Scheduler] Live price fetch unavailable: {_live_exc} — using stored close")
+
         if not data_map:
             logger.warning("[Scheduler] signal_pipeline: no data available")
             return
 
         portfolio = self._build_portfolio_state()
+        if portfolio is None:
+            logger.error("[Scheduler] signal_pipeline: portfolio state unavailable — skipping cycle")
+            return
 
         try:
             decisions = self.engine.decide_all(
@@ -618,7 +632,7 @@ class TradingScheduler:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _build_portfolio_state(self) -> PortfolioState:
+    def _build_portfolio_state(self) -> Optional[PortfolioState]:
         """
         Build a PortfolioState from live Alpaca data.
         Uses actual positions and account value — not the audit log — so ghost
@@ -638,6 +652,16 @@ class TradingScheduler:
             open_count   = len(positions) if not positions.empty else 0
             held_tickers = list(positions["ticker"]) if not positions.empty and "ticker" in positions.columns else []
 
+            # Load stored close prices for correlation checks
+            price_data = {}
+            for t in held_tickers:
+                try:
+                    t_df = self.store.load_ohlcv(t)
+                    if not t_df.empty and "close" in t_df.columns:
+                        price_data[t] = t_df["close"]
+                except Exception:
+                    pass
+
             # Crypto exposure: sum market value of BTC/SOL positions
             crypto_tickers = set(self.config.assets.crypto)
             if not positions.empty and "ticker" in positions.columns:
@@ -649,6 +673,10 @@ class TradingScheduler:
             # Daily P&L and true peak from Alpaca portfolio history
             daily_pnl_pct = 0.0
             peak_value = total_value
+            try:
+                peak_value = max(peak_value, self.engine.risk.peak_value_usd)
+            except Exception:
+                pass
             try:
                 from alpaca.trading.requests import GetPortfolioHistoryRequest
                 history = alpaca._trading_client.get_portfolio_history(
@@ -671,17 +699,11 @@ class TradingScheduler:
                 crypto_exposure_usd=crypto_exposure,
                 daily_pnl_pct=daily_pnl_pct,
                 peak_value_usd=max(peak_value, total_value),
+                price_data=price_data,
             )
         except Exception as exc:
-            logger.warning(f"[Scheduler] Could not build portfolio state: {exc} — using conservative default")
-            # Use max_open_positions as the fallback count so the risk manager
-            # blocks all new BUYs when Alpaca is unreachable. Returning 0 was
-            # causing the system to approve unlimited new positions on API errors.
-            return PortfolioState(
-                total_value_usd=100_000.0,
-                cash_usd=0.0,
-                open_positions=self.config.risk.max_open_positions,
-                crypto_exposure_usd=0.0,
-                daily_pnl_pct=0.0,
-                peak_value_usd=100_000.0,
+            logger.error(
+                f"[Scheduler] FAIL-CLOSED: Could not build portfolio state: {exc} — "
+                f"trades BLOCKED this cycle"
             )
+            return None

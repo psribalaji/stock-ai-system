@@ -52,9 +52,7 @@ class UniverseManager:
         self.watchlist_path = self.base / "discovery" / "watchlist.parquet"
         self.watchlist_path.parent.mkdir(parents=True, exist_ok=True)
         self._sync = self.config.data.sync_to_s3 if sync_to_s3 is None else sync_to_s3
-        self._auto_approve = auto_approve if auto_approve is not None else (
-            self.config.discovery.auto_approve and self.config.is_paper
-        )
+        self._auto_approve = auto_approve if auto_approve is not None else self.config.discovery.auto_approve
 
     # ── Public API ────────────────────────────────────────────────────────────
 

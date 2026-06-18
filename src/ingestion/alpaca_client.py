@@ -213,10 +213,25 @@ class AlpacaClient:
                 self._attach_stop_loss(ticker, qty, stop_loss_price)
                 result["stop_loss_price"] = stop_loss_price
             except Exception as exc:
-                logger.warning(
-                    f"Stop loss attachment failed for {ticker} "
-                    f"(order {order.id} still submitted): {exc}"
+                logger.error(
+                    f"Stop loss attachment FAILED for {ticker} "
+                    f"(order {order.id}) — position is UNPROTECTED: {exc}"
                 )
+                # Mandatory stop: close the unprotected position immediately
+                try:
+                    self._submit_market_order_only(ticker, qty, "sell")
+                    logger.warning(
+                        f"[AlpacaClient] Closed unprotected BUY for {ticker} "
+                        f"(qty={qty}) — stop loss could not be attached"
+                    )
+                    result["status"] = "closed_no_stop"
+                except Exception as close_exc:
+                    logger.critical(
+                        f"[AlpacaClient] CRITICAL: Could not close unprotected position "
+                        f"{ticker} (qty={qty}). MANUAL INTERVENTION REQUIRED. "
+                        f"Close error: {close_exc}"
+                    )
+                    result["status"] = "unprotected"
 
         return result
 

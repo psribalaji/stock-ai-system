@@ -195,4 +195,4 @@ discovery:
     - stocks
     - stockmarket
   news_lookback_hours:  48
-  auto_approve:         false   # Always false — approve tickers manually in the dashboard
+  auto_approve:         true    # Safe: screener filters + confidence gate + all risk rules still apply

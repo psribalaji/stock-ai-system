@@ -370,7 +370,8 @@ class TestSchedulerJobs:
         })
         scheduler.engine.decide_all.return_value = []
 
-        with patch("src.scheduler.scheduler._is_market_hours", return_value=True):
+        with patch("src.scheduler.scheduler._is_market_hours", return_value=True), \
+             patch.object(scheduler, "_build_portfolio_state", return_value=MagicMock()):
             scheduler.job_signal_pipeline()
 
         scheduler.engine.decide_all.assert_called_once()
@@ -391,7 +392,8 @@ class TestSchedulerJobs:
             [{"ticker": "TEST", "direction": "BUY"}]
         )
 
-        with patch("src.scheduler.scheduler._is_market_hours", return_value=True):
+        with patch("src.scheduler.scheduler._is_market_hours", return_value=True), \
+             patch.object(scheduler, "_build_portfolio_state", return_value=MagicMock()):
             scheduler.job_signal_pipeline()
 
         scheduler.store.save_signals.assert_called_once()
@@ -410,7 +412,8 @@ class TestSchedulerJobs:
         scheduler.engine.decide_all.return_value = [MagicMock()]
         scheduler.engine.decisions_to_dataframe.return_value = pd.DataFrame([{"ticker": "TEST"}])
 
-        with patch("src.scheduler.scheduler._is_market_hours", return_value=True):
+        with patch("src.scheduler.scheduler._is_market_hours", return_value=True), \
+             patch.object(scheduler, "_build_portfolio_state", return_value=MagicMock()):
             scheduler.job_signal_pipeline()
 
         cb.assert_called_once()
@@ -437,7 +440,8 @@ class TestSchedulerJobs:
     def test_signal_pipeline_no_data_is_no_op(self, scheduler):
         """If store has no data, pipeline should be a no-op."""
         scheduler.store.load_ohlcv.return_value = pd.DataFrame()
-        with patch("src.scheduler.scheduler._is_market_hours", return_value=True):
+        with patch("src.scheduler.scheduler._is_market_hours", return_value=True), \
+             patch.object(scheduler, "_build_portfolio_state", return_value=MagicMock()):
             scheduler.job_signal_pipeline()
         scheduler.engine.decide_all.assert_not_called()
 

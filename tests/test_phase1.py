@@ -575,6 +575,14 @@ class TestConfidenceScorer:
 
 class TestRiskManager:
 
+    @pytest.fixture(autouse=True)
+    def _clean_risk_state(self):
+        """Remove persisted risk state before and after each test."""
+        state_file = Path("data/state/risk_state.json")
+        state_file.unlink(missing_ok=True)
+        yield
+        state_file.unlink(missing_ok=True)
+
     @pytest.fixture
     def rm(self):
         return RiskManager()
@@ -870,6 +878,14 @@ class TestOrderExecutorTrailingStop:
 # ── Take-Profit Tests ────────────────────────────────────────────────────────
 
 class TestRiskManagerTakeProfit:
+
+    @pytest.fixture(autouse=True)
+    def _clean_risk_state(self):
+        """Remove persisted risk state before and after each test."""
+        state_file = Path("data/state/risk_state.json")
+        state_file.unlink(missing_ok=True)
+        yield
+        state_file.unlink(missing_ok=True)
 
     @pytest.fixture
     def rm(self):
