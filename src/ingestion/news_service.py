@@ -190,6 +190,72 @@ class NewsService:
             "top_headlines":  df["headline"].head(5).tolist(),
         }
 
+    def get_earnings_context(self, ticker: str) -> dict:
+        """
+        Fetch upcoming earnings date + recent EPS beat/miss history from Finnhub.
+        Used by LLMAnalysisService to enrich signals around earnings events.
+
+        Returns:
+            Dict with keys:
+              - upcoming_date:       Next earnings date string or None
+              - days_until_earnings: Integer days until next earnings, or None
+              - beat_miss:           "BEAT" | "MISS" | "IN-LINE" | None (last quarter)
+              - last_eps_surprise_pct: Float surprise % for last quarter
+              - consecutive_beats:   How many of last 4 quarters were beats
+              - eps_history:         List of last 4 quarters [{period, actual, estimate, surprise_pct}]
+        """
+        from datetime import date, timedelta
+        today = date.today()
+
+        result: dict = {
+            "upcoming_date":        None,
+            "days_until_earnings":  None,
+            "beat_miss":            None,
+            "last_eps_surprise_pct": None,
+            "consecutive_beats":    0,
+            "eps_history":          [],
+        }
+
+        try:
+            calendar = self._client.earnings_calendar(
+                symbol=ticker,
+                _from=today.strftime("%Y-%m-%d"),
+                to=(today + timedelta(days=30)).strftime("%Y-%m-%d"),
+            )
+            entries = (calendar or {}).get("earningsCalendar") or []
+            if entries:
+                next_entry = entries[0]
+                earnings_date = pd.Timestamp(next_entry["date"]).date()
+                result["upcoming_date"]       = next_entry["date"]
+                result["days_until_earnings"] = (earnings_date - today).days
+        except Exception as exc:
+            logger.debug(f"[NewsService] Earnings calendar fetch failed for {ticker}: {exc}")
+
+        try:
+            history = self._client.company_earnings(ticker, limit=4) or []
+            result["eps_history"] = [
+                {
+                    "period":       e.get("period"),
+                    "actual":       e.get("actual"),
+                    "estimate":     e.get("estimate"),
+                    "surprise_pct": e.get("surprisePercent"),
+                }
+                for e in history
+            ]
+            if history:
+                last = history[0]
+                sp = last.get("surprisePercent")
+                result["last_eps_surprise_pct"] = sp
+                if sp is not None:
+                    result["beat_miss"] = "BEAT" if sp > 2 else ("MISS" if sp < -2 else "IN-LINE")
+                result["consecutive_beats"] = sum(
+                    1 for e in history if (e.get("surprisePercent") or 0) > 2
+                )
+        except Exception as exc:
+            logger.debug(f"[NewsService] Earnings history fetch failed for {ticker}: {exc}")
+
+        return result
+
     def validate_connection(self) -> bool:
         """Test Finnhub connection."""
         try:

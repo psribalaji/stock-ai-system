@@ -36,9 +36,9 @@ class ParquetStore:
         from src.config import get_config
         cfg = get_config()
         # sync_to_s3 param overrides config — used by tests to disable S3
-        self._sync   = cfg.data.sync_to_s3 if sync_to_s3 is None else sync_to_s3
-        self._bucket = cfg.data.s3_bucket
-        self._prefix = cfg.data.s3_prefix.rstrip("/")
+        self._sync        = cfg.data.sync_to_s3 if sync_to_s3 is None else sync_to_s3
+        self._bucket      = cfg.s3_bucket_effective   # live bucket when mode=live
+        self._prefix      = cfg.data.s3_prefix.rstrip("/")
         self._s3 = None  # lazy — created on first use
 
     def _init_dirs(self) -> None:
@@ -308,6 +308,78 @@ class ParquetStore:
         if end:
             df = df[df["timestamp_submitted"].dt.date <= end]
         return df.sort_values("timestamp_submitted", ascending=False).reset_index(drop=True)
+
+    def close_open_trade(
+        self,
+        ticker: str,
+        exit_price: float,
+        close_reason: str,
+    ) -> bool:
+        """
+        Find the most recent submitted BUY for ticker and write exit data in-place.
+
+        Searches monthly parquet files newest-first so it finds recent trades fast.
+        Uses fill_price (actual Alpaca fill) as the entry basis when available,
+        falling back to the signal entry_price.
+
+        Returns True if a matching open trade was found and updated.
+        """
+        from datetime import timezone
+        audit_dir = self.base / "audit"
+        self._s3_sync_dir("audit")
+
+        for path in sorted(audit_dir.glob("*.parquet"), reverse=True):
+            df = pd.read_parquet(path)
+            if df.empty or "ticker" not in df.columns:
+                continue
+
+            mask = (
+                (df["ticker"] == ticker)
+                & (df["status"] == "submitted")
+                & (df["direction"] == "BUY")
+            )
+            candidates = df[mask]
+            if candidates.empty:
+                continue
+
+            if "timestamp_submitted" in df.columns:
+                idx = pd.to_datetime(candidates["timestamp_submitted"]).sort_values(
+                    ascending=False
+                ).index[0]
+            else:
+                idx = candidates.index[0]
+
+            row = df.loc[idx]
+            fill = float(row["fill_price"]) if "fill_price" in row and row["fill_price"] else 0.0
+            entry = fill or float(row["entry_price"])
+            pnl_pct = (exit_price - entry) / entry if entry > 0 else 0.0
+
+            df.loc[idx, "status"]       = "closed"
+            df.loc[idx, "exit_price"]   = round(exit_price, 4)
+            df.loc[idx, "pnl_pct"]      = round(pnl_pct, 6)
+            df.loc[idx, "close_reason"] = close_reason
+            df.loc[idx, "closed_at"]    = datetime.now(timezone.utc).isoformat()
+
+            df.to_parquet(path, engine="pyarrow", compression="snappy", index=False)
+            self._s3_upload(path)
+            logger.info(
+                f"[ParquetStore] Trade closed — {ticker}: "
+                f"exit=${exit_price:.2f}, pnl={pnl_pct:+.2%}, reason={close_reason}"
+            )
+            return True
+
+        logger.warning(f"[ParquetStore] No open submitted BUY found for {ticker}")
+        return False
+
+    def get_open_trade_tickers(self) -> set[str]:
+        """Return the set of tickers that have a submitted (open) BUY in the audit log."""
+        audit = self.load_audit()
+        if audit.empty or "status" not in audit.columns:
+            return set()
+        open_buys = audit[
+            (audit["status"] == "submitted") & (audit["direction"] == "BUY")
+        ]
+        return set(open_buys["ticker"].unique())
 
     # ── DATA VALIDATION ──────────────────────────────────────────
 

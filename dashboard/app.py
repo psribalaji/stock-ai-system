@@ -88,53 +88,119 @@ def _direction_color(direction: str) -> str:
     return "🟢" if direction == "BUY" else "🔴"
 
 
+def _is_market_open() -> bool:
+    """Return True if US stock market is currently open (ET timezone)."""
+    try:
+        from zoneinfo import ZoneInfo
+        et  = ZoneInfo("America/New_York")
+        now = datetime.now(et)
+        if now.weekday() >= 5:
+            return False
+        open_  = now.replace(hour=9,  minute=30, second=0, microsecond=0)
+        close_ = now.replace(hour=16, minute=0,  second=0, microsecond=0)
+        return open_ <= now <= close_
+    except Exception:
+        return False
+
+
+_SECTOR_MAP: dict[str, str] = {
+    "NVDA": "Tech",    "MSFT": "Tech",   "AAPL": "Tech",   "GOOGL": "Tech",
+    "META": "Tech",    "AMD":  "Tech",   "ORCL": "Tech",   "CRWD": "Tech",
+    "TSM":  "Tech",    "QCOM": "Tech",   "INTC": "Tech",   "CRM":  "Tech",
+    "PLTR": "Tech",    "NET":  "Tech",   "AVGO": "Tech",   "AMZN": "Tech",
+    "TSLA": "Tech",    "QQQ":  "Tech ETF",
+    "LLY":  "Healthcare", "JNJ": "Healthcare", "PFE":  "Healthcare",
+    "ABBV": "Healthcare", "MRNA":"Healthcare", "UNH":  "Healthcare",
+    "XLV":  "Healthcare ETF",
+    "XOM":  "Energy",  "CVX":  "Energy",  "NEE":  "Energy",  "ENPH": "Energy",
+    "XLE":  "Energy ETF",
+    "LMT":  "Defence", "RTX":  "Defence", "NOC":  "Defence", "GD":   "Defence",
+    "XLI":  "Industrials ETF",
+    "JPM":  "Finance", "GS":   "Finance", "MS":   "Finance", "IBKR": "Finance",
+    "XLF":  "Finance ETF",
+    "SPY":  "Broad Market",
+    "GLD":  "Gold",    "TLT":  "Bonds",
+    "BTC":  "Crypto",
+}
+
+
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 def _sidebar() -> str:
     cfg = reload_config()
-    is_live = cfg.is_live
+
+    if "page" not in st.session_state:
+        st.session_state["page"] = "Signals Today"
 
     st.sidebar.title("StockAI")
 
-    # Dynamic live/paper badge
-    if is_live:
-        st.sidebar.error("🔴 LIVE TRADING — real money at risk")
+    # Trading mode badge
+    if cfg.is_live:
+        st.sidebar.error("🔴 LIVE — real money at risk")
     else:
-        st.sidebar.success("🟡 PAPER TRADING — simulation mode")
+        st.sidebar.success("🟡 PAPER — simulation")
+
+    # Market hours badge
+    if _is_market_open():
+        st.sidebar.success("🟢 Market Open")
+    else:
+        st.sidebar.info("⚫ Market Closed")
+
+    # Account snapshot
+    try:
+        from src.ingestion.alpaca_client import AlpacaClient
+        _acct      = AlpacaClient()._trading_client.get_account()
+        _total     = float(_acct.portfolio_value)
+        _last_eq   = float(_acct.last_equity) if _acct.last_equity else _total
+        _day_pnl   = _total - _last_eq
+        st.sidebar.metric("Portfolio", f"${_total:,.0f}", delta=f"${_day_pnl:+,.0f}")
+        st.sidebar.metric("Cash",      f"${float(_acct.cash):,.0f}")
+    except Exception:
+        st.sidebar.caption(f"Mode: **{cfg.trading.mode.upper()}**")
 
     st.sidebar.divider()
 
-    page = st.sidebar.radio(
-        "Navigate",
-        ["How It Works", "Signals Today", "Activity Feed", "Discovery", "Portfolio",
-         "P&L Tracker", "Report Card", "Monitor",
-         "Risk", "Strategy Performance", "Stops & TPs",
-         "Sentiment", "Backtest", "Watchlist Alerts",
-         "ML Ensemble", "Config Editor",
-         "Audit Log", "Live Trading"],
-        index=1,
-    )
+    def _nav(label: str, page: str) -> None:
+        active = st.session_state["page"] == page
+        if st.sidebar.button(
+            label,
+            use_container_width=True,
+            type="primary" if active else "secondary",
+            key=f"nav_{page}",
+        ):
+            st.session_state["page"] = page
+            st.rerun()
+
+    st.sidebar.caption("TRADING")
+    _nav("🎯  Signals Today",  "Signals Today")
+    _nav("💼  Portfolio",      "Portfolio")
+    _nav("🔔  Activity Feed",  "Activity Feed")
+
+    st.sidebar.caption("ANALYSIS")
+    _nav("📡  Monitor",               "Monitor")
+    _nav("🔍  Discovery",             "Discovery")
+    _nav("⚖️   Risk",                 "Risk")
+    _nav("📈  Strategy Performance",  "Strategy Performance")
+    _nav("💬  Sentiment",             "Sentiment")
+    _nav("👀  Watchlist Alerts",      "Watchlist Alerts")
+
+    st.sidebar.caption("TOOLS")
+    _nav("💰  P&L Tracker",    "P&L Tracker")
+    _nav("📋  Report Card",    "Report Card")
+    _nav("🧪  Backtest",       "Backtest")
+    _nav("🛑  Stops & TPs",    "Stops & TPs")
+    _nav("📜  Audit Log",      "Audit Log")
+    _nav("🤖  ML Ensemble",    "ML Ensemble")
+    _nav("⚙️   Config Editor", "Config Editor")
+    _nav("🚀  Live Trading",   "Live Trading")
+    _nav("❓  How It Works",   "How It Works")
 
     st.sidebar.divider()
-    if st.sidebar.button("Refresh data"):
+    if st.sidebar.button("🔄 Refresh", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-    # Account snapshot (always shown)
-    try:
-        from src.ingestion.alpaca_client import AlpacaClient
-        _acct = AlpacaClient()._trading_client.get_account()
-        _total = float(_acct.portfolio_value)
-        _pnl   = _total - 100_000
-        st.sidebar.metric("Portfolio",  f"${_total:,.0f}", delta=f"${_pnl:+,.0f}")
-        st.sidebar.metric("Cash",       f"${float(_acct.cash):,.0f}")
-    except Exception:
-        st.sidebar.caption(
-            f"Mode: **{cfg.trading.mode.upper()}**  \n"
-            f"Universe: {', '.join(cfg.assets.all_tradeable)}"
-        )
-
-    return page
+    return st.session_state["page"]
 
 
 # ── Page: Signals Today ───────────────────────────────────────────────────────
@@ -217,23 +283,53 @@ def page_signals() -> None:
         m3.metric("Avg confidence", f"{filtered['confidence'].mean():.1%}" if not filtered.empty else "—")
         m4.metric("Tickers",        filtered["ticker"].nunique() if "ticker" in filtered.columns else "—")
 
-    # Table
-    display_cols = [c for c in [
-        "timestamp", "ticker", "direction", "strategy", "pattern",
-        "confidence", "position_size_pct", "entry_price", "stop_loss_price",
-        "approved", "block_reason", "llm_summary",
-    ] if c in filtered.columns]
+    # ── Signal cards ─────────────────────────────────────────────
+    if "approved" in filtered.columns:
+        filtered = filtered.sort_values(["approved", "confidence"], ascending=[False, False])
 
-    if "direction" in filtered.columns:
-        filtered["direction"] = filtered["direction"].apply(
-            lambda d: f"{_direction_color(d)} {d}"
-        )
+    for _, row in filtered.iterrows():
+        ticker    = row.get("ticker", "?")
+        raw_dir   = str(row.get("direction", "HOLD"))
+        direction = raw_dir.replace("🟢 ", "").replace("🔴 ", "")
+        confidence  = float(row.get("confidence", 0) or 0)
+        strategy    = row.get("strategy", "?")
+        pattern     = row.get("pattern", "")
+        approved    = bool(row.get("approved", False))
+        block_reason = str(row.get("block_reason", "") or "")
+        llm_summary  = str(row.get("llm_summary", "") or "")
+        ts = str(row.get("timestamp", ""))[:16]
 
-    st.dataframe(
-        filtered[display_cols].reset_index(drop=True),
-        use_container_width=True,
-        height=400,
-    )
+        icon   = "🟢" if direction == "BUY" else "🔴"
+        badge  = "✅ Approved" if approved else "🚫 Blocked"
+        label  = f"{icon} **{ticker}** · {direction} · {strategy} · conf={confidence:.0%} · {badge}"
+
+        with st.expander(label, expanded=approved):
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Confidence", f"{confidence:.0%}",
+                      help="Statistical win-rate score — not generated by the LLM")
+            entry = row.get("entry_price", 0) or 0
+            stop  = row.get("stop_loss_price", 0) or 0
+            size  = row.get("position_size_pct", 0) or 0
+            c2.metric("Entry Price",   f"${float(entry):,.2f}" if entry else "—")
+            c3.metric("Stop Loss",     f"${float(stop):,.2f}"  if stop  else "—")
+            c4.metric("Position Size", f"{float(size):.1%}"    if size  else "—")
+
+            if llm_summary:
+                st.info(f"💡 {llm_summary}")
+
+            if approved:
+                st.success(
+                    f"**Why approved:** {strategy} detected a **{direction}** pattern "
+                    f"({pattern}). Confidence {confidence:.0%} exceeded the "
+                    f"{get_config().risk.min_confidence:.0%} threshold."
+                )
+            else:
+                if block_reason:
+                    st.error(f"**Blocked:** {block_reason}")
+                else:
+                    st.error("🚫 Did not pass risk or confidence checks.")
+
+            st.caption(f"{ts} · {strategy} · {pattern}")
 
 
 # ── Page: Portfolio ───────────────────────────────────────────────────────────
@@ -291,9 +387,14 @@ def _load_alpaca_portfolio():
 def page_portfolio() -> None:
     st.header("Portfolio")
 
-    STARTING_BALANCE = 100_000.0
-
     acct, positions, history_df, orders_df = _load_alpaca_portfolio()
+
+    # Derive starting balance from oldest equity in history — works for any account size
+    if history_df is not None and not history_df.empty:
+        valid_eq = history_df[history_df["equity"] > 0]["equity"]
+        STARTING_BALANCE = float(valid_eq.iloc[0]) if not valid_eq.empty else None
+    else:
+        STARTING_BALANCE = None
 
     # ── Account summary ───────────────────────────────────────────
     st.subheader("Account Summary")
@@ -302,19 +403,22 @@ def page_portfolio() -> None:
         total_value   = acct["portfolio_value"]
         cash          = acct["cash"]
         invested      = total_value - cash
-        total_pnl     = total_value - STARTING_BALANCE
-        total_pnl_pct = total_pnl / STARTING_BALANCE
+        total_pnl     = total_value - STARTING_BALANCE if STARTING_BALANCE else None
+        total_pnl_pct = total_pnl / STARTING_BALANCE if STARTING_BALANCE else None
 
         m1, m2, m3, m4, m5 = st.columns(5)
         m1.metric("Total Value",      f"${total_value:,.2f}")
         m2.metric("Cash Available",   f"${cash:,.2f}")
         m3.metric("Invested",         f"${invested:,.2f}")
-        m4.metric(
-            "Total P&L",
-            f"${total_pnl:+,.2f}",
-            delta=f"{total_pnl_pct:+.2%}",
-            delta_color="normal",
-        )
+        if total_pnl is not None:
+            m4.metric(
+                "Total P&L",
+                f"${total_pnl:+,.2f}",
+                delta=f"{total_pnl_pct:+.2%}",
+                delta_color="normal",
+            )
+        else:
+            m4.metric("Total P&L", "—")
         m5.metric("Buying Power",     f"${acct['buying_power']:,.2f}")
     else:
         st.warning("Could not connect to Alpaca — showing cached audit data only.")
@@ -332,8 +436,9 @@ def page_portfolio() -> None:
             fillcolor="rgba(0,200,255,0.08)",
             name="Portfolio Value",
         ))
-        fig_eq.add_hline(y=STARTING_BALANCE, line_dash="dash", line_color="gray",
-                         annotation_text="Starting $100k")
+        if STARTING_BALANCE:
+            fig_eq.add_hline(y=STARTING_BALANCE, line_dash="dash", line_color="gray",
+                             annotation_text=f"Starting ${STARTING_BALANCE:,.0f}")
         fig_eq.update_layout(
             title="Portfolio Value Over Time",
             yaxis_title="Value ($)",
@@ -442,6 +547,76 @@ def page_portfolio() -> None:
     else:
         st.info("No open positions.")
 
+    # ── Sector Exposure ───────────────────────────────────────────
+    if positions is not None and not positions.empty and "market_value" in positions.columns:
+        st.divider()
+        st.subheader("Sector Exposure")
+        import plotly.graph_objects as go
+        sector_values: dict[str, float] = {}
+        for _, p in positions.iterrows():
+            sector = _SECTOR_MAP.get(str(p["ticker"]), "Other")
+            sector_values[sector] = sector_values.get(sector, 0.0) + float(p["market_value"])
+
+        if sector_values:
+            fig_sec = go.Figure(go.Pie(
+                labels=list(sector_values.keys()),
+                values=list(sector_values.values()),
+                hole=0.45,
+                textinfo="label+percent",
+                marker=dict(line=dict(color="#1e1e1e", width=1)),
+            ))
+            fig_sec.update_layout(
+                title="Portfolio by Sector",
+                height=320,
+                margin=dict(t=40, b=20),
+                showlegend=False,
+            )
+            st.plotly_chart(fig_sec, use_container_width=True)
+
+    # ── Upcoming Earnings ─────────────────────────────────────────
+    if positions is not None and not positions.empty:
+        st.divider()
+        st.subheader("Upcoming Earnings")
+        st.caption("Earnings dates for current holdings — high volatility events, consider reducing size beforehand.")
+
+        @st.cache_data(ttl=3600)
+        def _load_earnings_for_positions(tickers_tuple: tuple) -> list[dict]:
+            try:
+                from src.ingestion.news_service import NewsService
+                svc  = NewsService()
+                rows = []
+                for ticker in tickers_tuple:
+                    ctx = svc.get_earnings_context(ticker)
+                    if ctx.get("upcoming_date"):
+                        rows.append({
+                            "Ticker":        ticker,
+                            "Earnings Date": ctx["upcoming_date"],
+                            "Days Away":     ctx.get("days_until_earnings", "?"),
+                            "Last Result":   ctx.get("beat_miss") or "—",
+                            "Last Surprise": (
+                                f"{ctx['last_eps_surprise_pct']:+.1f}%"
+                                if ctx.get("last_eps_surprise_pct") is not None else "—"
+                            ),
+                            "Consec. Beats": ctx.get("consecutive_beats", 0),
+                        })
+                return rows
+            except Exception:
+                return []
+
+        tickers_tuple = tuple(sorted(positions["ticker"].tolist()))
+        with st.spinner("Fetching earnings calendar…"):
+            earnings_rows = _load_earnings_for_positions(tickers_tuple)
+
+        if earnings_rows:
+            edf = pd.DataFrame(earnings_rows).sort_values("Days Away")
+            st.dataframe(edf.reset_index(drop=True), use_container_width=True, hide_index=True)
+            for er in earnings_rows:
+                days = er["Days Away"]
+                if isinstance(days, int) and days <= 3:
+                    st.warning(f"⚠️ **{er['Ticker']}** reports in **{days} day(s)** — elevated volatility risk.")
+        else:
+            st.info("No upcoming earnings in the next 30 days for current holdings.")
+
     st.divider()
 
     # ── Risk Exposure Summary ──────────────────────────────────────
@@ -452,7 +627,7 @@ def page_portfolio() -> None:
     if positions is not None and not positions.empty and acct:
         total_value = acct["portfolio_value"]
         num_positions = len(positions)
-        max_positions = cfg.risk.max_open_positions
+        max_positions = cfg.effective_risk.max_open_positions
 
         # Position count
         r1, r2, r3 = st.columns(3)
@@ -463,8 +638,8 @@ def page_portfolio() -> None:
         if "market_value" in positions.columns and total_value > 0:
             largest_pct = positions["market_value"].max() / total_value
             r2.metric("Largest Position", f"{largest_pct:.1%}",
-                      delta=f"{'⚠️ Near limit' if largest_pct > cfg.risk.max_position_pct * 0.8 else '✅ OK'}",
-                      help=f"Limit: {cfg.risk.max_position_pct:.0%}")
+                      delta=f"{'⚠️ Near limit' if largest_pct > cfg.effective_risk.max_position_pct * 0.8 else '✅ OK'}",
+                      help=f"Limit: {cfg.effective_risk.max_position_pct:.0%}")
 
         # Portfolio concentration
         if "market_value" in positions.columns and total_value > 0:
@@ -859,13 +1034,13 @@ def page_live_trading() -> None:
     st.subheader("Current Config")
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Mode",            cfg.trading.mode.upper())
-    col2.metric("Max position",    f"{cfg.risk.max_position_pct:.0%}")
-    col3.metric("Min confidence",  f"{cfg.risk.min_confidence:.0%}")
-    col4.metric("Stop loss",       f"{cfg.risk.stop_loss_pct:.0%}")
+    col2.metric("Max position",    f"{cfg.effective_risk.max_position_pct:.0%}")
+    col3.metric("Min confidence",  f"{cfg.effective_risk.min_confidence:.0%}")
+    col4.metric("Stop loss",       f"{cfg.effective_risk.stop_loss_pct:.0%}")
     col5, col6, col7, col8 = st.columns(4)
-    col5.metric("Max positions",   cfg.risk.max_open_positions)
-    col6.metric("Circuit breaker", f"{cfg.risk.daily_loss_limit:.0%} daily loss")
-    col7.metric("Kill switch",     f"{cfg.risk.max_drawdown_pct:.0%} drawdown")
+    col5.metric("Max positions",   cfg.effective_risk.max_open_positions)
+    col6.metric("Circuit breaker", f"{cfg.effective_risk.daily_loss_limit:.0%} daily loss")
+    col7.metric("Kill switch",     f"{cfg.effective_risk.max_drawdown_pct:.0%} drawdown")
     col8.metric("S3 sync",         "ON" if cfg.data.sync_to_s3 else "OFF")
 
 

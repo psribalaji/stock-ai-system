@@ -46,6 +46,58 @@ def render_pnl_tracker_page() -> None:
     submitted = submitted.copy()
     submitted["date"] = pd.to_datetime(submitted["timestamp_submitted"]).dt.date
 
+    # ── Cumulative P&L from Alpaca portfolio history ──────────────
+    st.subheader("Cumulative P&L")
+    try:
+        from src.ingestion.alpaca_client import AlpacaClient
+        from alpaca.trading.requests import GetPortfolioHistoryRequest
+        import datetime as _dt
+
+        client  = AlpacaClient()
+        history = client._trading_client.get_portfolio_history(
+            GetPortfolioHistoryRequest(period="1M", timeframe="1D")
+        )
+        if history and history.equity:
+            valid_equity = [e for e in history.equity if e and e > 0]
+            start_equity = valid_equity[0] if valid_equity else None
+            hist_df = pd.DataFrame({
+                "date":   [_dt.datetime.fromtimestamp(t).date() for t in history.timestamp],
+                "equity": history.equity,
+                "pnl":    [e - start_equity for e in history.equity] if start_equity else history.profit_loss,
+            })
+            hist_df = hist_df[hist_df["equity"] > 0]
+
+            if not hist_df.empty:
+                current_pnl = hist_df["pnl"].iloc[-1]
+                line_color  = "#00c853" if current_pnl >= 0 else "#ff5252"
+                fill_color  = "rgba(0,200,83,0.1)" if current_pnl >= 0 else "rgba(255,82,82,0.1)"
+                start_label = f"${start_equity:,.0f}" if start_equity else "start"
+
+                fig_cum = go.Figure()
+                fig_cum.add_trace(go.Scatter(
+                    x=hist_df["date"], y=hist_df["pnl"],
+                    mode="lines+markers",
+                    line=dict(color=line_color, width=2),
+                    fill="tozeroy",
+                    fillcolor=fill_color,
+                    name=f"P&L vs {start_label} start",
+                ))
+                fig_cum.add_hline(
+                    y=0, line_dash="dash", line_color="gray",
+                    annotation_text=f"Break-even ({start_label})",
+                )
+                fig_cum.update_layout(
+                    title=f"Cumulative P&L — Current: ${current_pnl:+,.2f}",
+                    yaxis_title="P&L ($)",
+                    height=300,
+                    margin=dict(t=40, b=20),
+                )
+                st.plotly_chart(fig_cum, use_container_width=True)
+    except Exception as _exc:
+        st.caption(f"Could not load portfolio history from Alpaca: {_exc}")
+
+    st.divider()
+
     # ── Summary metrics
     st.subheader("Overall Performance")
     total_trades = len(submitted)

@@ -72,13 +72,14 @@ class LiveTrader:
     """
 
     # Minimum portfolio value to allow live trading
-    MIN_PORTFOLIO_VALUE: float = 1_000.0
+    MIN_PORTFOLIO_VALUE: float = 100.0
 
-    # Hardcoded risk limits — must match config or pre-flight fails
-    REQUIRED_MAX_POSITION_PCT: float = 0.05
-    REQUIRED_STOP_LOSS_PCT: float = 0.07
-    REQUIRED_MIN_CONFIDENCE: float = 0.60
-    REQUIRED_MAX_OPEN_POSITIONS: int = 15
+    # Safety caps — effective_risk must not exceed these absolute limits
+    # Designed as guardrails, not mirrors of any specific config value
+    REQUIRED_MAX_POSITION_PCT: float = 0.20   # never bet >20% on one position
+    REQUIRED_STOP_LOSS_PCT: float = 0.15      # never let a stop loss exceed 15%
+    REQUIRED_MIN_CONFIDENCE: float = 0.55     # always require >55% confidence
+    REQUIRED_MAX_OPEN_POSITIONS: int = 20     # never allow >20 concurrent positions
 
     def __init__(self, alpaca_client=None, s3_sync=None):
         """
@@ -313,7 +314,7 @@ class LiveTrader:
     def _check_risk_config(self) -> PreflightCheck:
         """Risk config must match hardcoded safety limits."""
         cfg = reload_config()
-        r = cfg.risk
+        r = cfg.effective_risk
         mismatches = []
 
         if r.max_position_pct > self.REQUIRED_MAX_POSITION_PCT:

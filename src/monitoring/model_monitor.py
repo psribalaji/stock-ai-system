@@ -340,6 +340,24 @@ class ModelMonitor:
                     triggered_at=now,
                 ))
 
+        # 5. Consecutive losses
+        trades = self._trades.get(m.strategy, [])
+        pnl_series = [t["pnl_pct"] for t in trades]
+        if pnl_series:
+            from src.backtesting.metrics import consecutive_losses
+            streak = consecutive_losses(pnl_series)
+            if streak["alert"]:
+                alerts.append(DriftAlert(
+                    strategy=m.strategy,
+                    alert_type="CONSECUTIVE_LOSSES",
+                    severity="WARNING",
+                    message=(
+                        f"{streak['current_streak']} consecutive losses "
+                        f"(worst ever: {streak['max_streak']})"
+                    ),
+                    triggered_at=now,
+                ))
+
         return alerts
 
     @staticmethod

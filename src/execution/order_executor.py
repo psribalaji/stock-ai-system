@@ -65,6 +65,9 @@ class OrderExecutor:
         dry_run:       If True, log orders but never submit (safe for testing)
     """
 
+    # How long to wait before retrying a failed order (prevents hammering Alpaca)
+    FAILED_ORDER_COOLDOWN_MIN = 60
+
     def __init__(
         self,
         alpaca_client=None,
@@ -77,8 +80,10 @@ class OrderExecutor:
         self.dry_run  = dry_run
         self._kill_switch_active = False
         self._trailing_stops: dict[str, dict] = self._load_trailing_stops()
-        self._take_profits: dict[str, float] = self._load_take_profits()
+        self._take_profits: dict[str, float] = {}   # {ticker: take_profit_price}
         self._cooldown_exits: dict[str, datetime] = self._load_cooldowns()
+        # Tracks last failure time per (ticker, direction) to prevent retry storms
+        self._failed_order_times: dict[tuple, datetime] = {}
 
         mode = "DRY-RUN" if dry_run else self.config.trading.mode.upper()
         logger.info(f"[OrderExecutor] Initialised — mode: {mode}")
@@ -102,6 +107,30 @@ class OrderExecutor:
             if key not in seen or d.confidence > seen[key].confidence:
                 seen[key] = d
         decisions = list(seen.values())
+
+        # Strategy conflict resolution: suppress mean_reversion SELL when any
+        # directional strategy (trend_following / volatility_breakout) says BUY on
+        # the same ticker. Mean_reversion is a short-term oscillation signal; if the
+        # broader trend strategies disagree, honoring the sell churns the position
+        # and re-incurs spread/slippage on what is likely a valid uptrend.
+        directional_buys = {
+            d.ticker for d in decisions
+            if d.direction == "BUY" and d.strategy in ("trend_following", "volatility_breakout")
+        }
+        suppressed: set[tuple] = set()
+        for d in decisions:
+            if (d.direction == "SELL"
+                    and d.strategy == "mean_reversion"
+                    and d.ticker in directional_buys):
+                suppressed.add((d.ticker, d.direction, d.strategy))
+                logger.info(
+                    f"[OrderExecutor] SUPPRESSED mean_reversion SELL for {d.ticker} "
+                    f"— directional BUY is active (trend takes priority over oscillation)"
+                )
+        decisions = [
+            d for d in decisions
+            if (d.ticker, d.direction, d.strategy) not in suppressed
+        ]
 
         results = []
         submitted_this_batch = set()
@@ -204,12 +233,18 @@ class OrderExecutor:
                                      fill_price=fill_price)
 
         except Exception as exc:
+            # Unwrap tenacity RetryError to get the real Alpaca error message
+            real_error = self._unwrap_error(exc)
             logger.error(
                 f"[OrderExecutor] ORDER FAILED: {decision.direction} "
-                f"{decision.ticker}: {exc}"
+                f"{decision.ticker}: {real_error}"
+            )
+            # Record failure time so we don't retry for FAILED_ORDER_COOLDOWN_MIN
+            self._failed_order_times[(decision.ticker, decision.direction)] = (
+                datetime.now(timezone.utc)
             )
             return self._make_result(decision, trade_id, qty=qty,
-                                     status="failed", error=str(exc))
+                                     status="failed", error=real_error)
 
     def activate_kill_switch(self) -> None:
         """
@@ -260,7 +295,6 @@ class OrderExecutor:
         """
         mult = self.config.risk.trailing_stop_atr_mult
         triggered = []
-        any_trailed = False
         for ticker, state in list(self._trailing_stops.items()):
             price = price_map.get(ticker)
             if price is None:
@@ -270,7 +304,7 @@ class OrderExecutor:
             if price > state["high_water"]:
                 state["high_water"] = price
                 state["stop_price"] = price - (mult * state["atr"])
-                any_trailed = True
+                self._save_trailing_stops()
                 logger.debug(
                     f"[OrderExecutor] Trailing stop raised for {ticker}: "
                     f"high=${price:.2f}, new_stop=${state['stop_price']:.2f}"
@@ -287,8 +321,7 @@ class OrderExecutor:
         # Remove triggered tickers
         for ticker in triggered:
             del self._trailing_stops[ticker]
-
-        if triggered or any_trailed:
+        if triggered:
             self._save_trailing_stops()
 
         return triggered
@@ -299,16 +332,14 @@ class OrderExecutor:
 
     def remove_trailing_stop(self, ticker: str) -> None:
         """Remove trailing stop tracking for a ticker (e.g. after manual sell)."""
-        if ticker in self._trailing_stops:
-            del self._trailing_stops[ticker]
-            self._save_trailing_stops()
+        self._trailing_stops.pop(ticker, None)
+        self._save_trailing_stops()
 
     # ── Take-profit management ────────────────────────────────────────────────
 
     def register_take_profit(self, ticker: str, take_profit_price: float) -> None:
         """Register a take-profit target after a BUY order is submitted."""
         self._take_profits[ticker] = take_profit_price
-        self._save_take_profits()
         logger.info(
             f"[OrderExecutor] Take-profit registered for {ticker}: "
             f"target=${take_profit_price:.2f}"
@@ -340,10 +371,6 @@ class OrderExecutor:
             del self._take_profits[ticker]
             self._trailing_stops.pop(ticker, None)  # clean up trailing stop too
 
-        if triggered:
-            self._save_take_profits()
-            self._save_trailing_stops()
-
         return triggered
 
     def get_take_profit(self, ticker: str) -> Optional[float]:
@@ -352,9 +379,7 @@ class OrderExecutor:
 
     def remove_take_profit(self, ticker: str) -> None:
         """Remove take-profit tracking for a ticker."""
-        if ticker in self._take_profits:
-            del self._take_profits[ticker]
-            self._save_take_profits()
+        self._take_profits.pop(ticker, None)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -376,9 +401,12 @@ class OrderExecutor:
 
     def restore_trailing_stops(self) -> None:
         """
-        Ensure all held Alpaca positions have trailing stop coverage.
-        On startup, persisted stops are already loaded from disk. This method
-        adds fallback stops for any positions not covered (e.g., opened manually).
+        Re-register trailing stops for all currently held Alpaca positions on startup.
+
+        Priority order per ticker:
+        1. Already in _trailing_stops (loaded from disk) — keep as-is, high-water preserved.
+        2. Not on disk — fetch recent bars to compute ATR, use current price as high_water
+           (better than entry price which could be stale by months).
         """
         if self.dry_run:
             return
@@ -386,22 +414,76 @@ class OrderExecutor:
             positions = self._get_client().get_positions()
             if positions.empty:
                 return
-            new_count = 0
+
+            restored = skipped = 0
             for _, row in positions.iterrows():
                 ticker = row["ticker"]
-                if ticker not in self._trailing_stops:
-                    self.register_trailing_stop(
-                        ticker=ticker,
-                        entry_price=float(row["avg_entry_price"]),
-                        atr=0.0,  # triggers % fallback
-                    )
-                    new_count += 1
-            if new_count:
-                logger.info(f"[OrderExecutor] Added fallback trailing stops for {new_count} uncovered positions")
-            logger.info(f"[OrderExecutor] Trailing stops active for {len(self._trailing_stops)} positions "
-                        f"({len(self._trailing_stops) - new_count} restored from disk)")
+                if ticker in self._trailing_stops:
+                    skipped += 1  # disk state is current — nothing to do
+                    continue
+
+                # Fetch recent bars to get ATR; fall back to hard stop if unavailable
+                atr = 0.0
+                high_water = float(row["current_price"])
+                try:
+                    bars = self._get_client().get_recent_bars(ticker, days=20)
+                    if not bars.empty and len(bars) >= 14:
+                        h = bars["high"]
+                        l = bars["low"]
+                        c = bars["close"]
+                        tr = pd.concat(
+                            [h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1
+                        ).max(axis=1)
+                        atr = float(tr.rolling(14).mean().iloc[-1])
+                        high_water = float(bars["high"].max())  # real high-water from bars
+                except Exception:
+                    pass
+
+                mult = self.config.risk.trailing_stop_atr_mult
+                if atr > 0:
+                    stop = high_water - mult * atr
+                else:
+                    stop = float(row["avg_entry_price"]) * (1 - self.config.risk.stop_loss_pct)
+
+                self._trailing_stops[ticker] = {
+                    "high_water": high_water,
+                    "stop_price": stop,
+                    "atr": atr,
+                }
+                restored += 1
+                logger.info(
+                    f"[OrderExecutor] Restored stop for {ticker}: "
+                    f"high_water=${high_water:.2f}, stop=${stop:.2f}, ATR=${atr:.2f}"
+                )
+
+            self._save_trailing_stops()
+            logger.info(
+                f"[OrderExecutor] Trailing stops: {skipped} from disk, {restored} rebuilt"
+            )
         except Exception as exc:
             logger.warning(f"[OrderExecutor] Could not restore trailing stops: {exc}")
+
+    def _trailing_stops_path(self):
+        from pathlib import Path
+        return Path(self.config.data.storage_path) / "audit" / "trailing_stops.json"
+
+    def _load_trailing_stops(self) -> dict[str, dict]:
+        """Load persisted trailing stop state from disk."""
+        import json
+        path = self._trailing_stops_path()
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            return {}
+
+    def _save_trailing_stops(self) -> None:
+        """Persist trailing stop state to disk so restarts don't lose high-water marks."""
+        import json
+        path = self._trailing_stops_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(self._trailing_stops))
 
     def _cooldown_path(self):
         from pathlib import Path
@@ -427,50 +509,6 @@ class OrderExecutor:
         path.parent.mkdir(parents=True, exist_ok=True)
         raw = {ticker: ts.isoformat() for ticker, ts in self._cooldown_exits.items()}
         path.write_text(json.dumps(raw))
-
-    # ── Trailing stop persistence ─────────────────────────────────────────────
-
-    def _trailing_stops_path(self):
-        from pathlib import Path
-        return Path(self.config.data.storage_path) / "state" / "trailing_stops.json"
-
-    def _load_trailing_stops(self) -> dict[str, dict]:
-        import json
-        path = self._trailing_stops_path()
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text())
-        except Exception:
-            return {}
-
-    def _save_trailing_stops(self) -> None:
-        import json
-        path = self._trailing_stops_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self._trailing_stops))
-
-    # ── Take-profit persistence ───────────────────────────────────────────────
-
-    def _take_profits_path(self):
-        from pathlib import Path
-        return Path(self.config.data.storage_path) / "state" / "take_profits.json"
-
-    def _load_take_profits(self) -> dict[str, float]:
-        import json
-        path = self._take_profits_path()
-        if not path.exists():
-            return {}
-        try:
-            return json.loads(path.read_text())
-        except Exception:
-            return {}
-
-    def _save_take_profits(self) -> None:
-        import json
-        path = self._take_profits_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(self._take_profits))
 
     def _check_position(self, decision: TradeDecision) -> str:
         """
@@ -511,10 +549,39 @@ class OrderExecutor:
                 remaining = int((cooldown - elapsed).total_seconds() / 60)
                 return f"{decision.ticker} in cooldown — {remaining}m until re-entry allowed"
 
+            # Confidence penalty window: ticker was stopped in last 30 days.
+            # Require higher confidence to re-enter — filters borderline signals
+            # on tickers that already proved they can go against us.
+            penalty_window = timedelta(days=30)
+            if elapsed < penalty_window:
+                required = self.config.risk.min_confidence + 0.10  # e.g. 0.60 → 0.70
+                if decision.confidence < required:
+                    return (
+                        f"{decision.ticker} stopped out {int(elapsed.days)}d ago — "
+                        f"confidence {decision.confidence:.2f} below re-entry bar "
+                        f"({required:.2f} required for 30d after a stop)"
+                    )
+
         if decision.direction == "SELL" and decision.ticker not in held_tickers:
             return f"no position in {decision.ticker} — skipping SELL (would be short)"
 
         return ""
+
+    def _unwrap_error(self, exc: Exception) -> str:
+        """
+        Extract the real error message from a tenacity RetryError.
+        RetryError wraps the last attempt's exception; without unwrapping
+        you only get a useless memory-address string like 'RetryError[<Future at 0x...>]'.
+        """
+        try:
+            from tenacity import RetryError
+            if isinstance(exc, RetryError):
+                underlying = exc.last_attempt.exception()
+                if underlying is not None:
+                    return f"{type(underlying).__name__}: {underlying}"
+        except Exception:
+            pass
+        return str(exc)
 
     def _check_safety(self, decision: TradeDecision) -> str:
         """
@@ -531,14 +598,32 @@ class OrderExecutor:
         if mode not in ("paper", "live"):
             return f"unknown trading mode '{mode}'"
 
+        from zoneinfo import ZoneInfo
+        from datetime import time as dtime
+        now_et = datetime.now(ZoneInfo("America/New_York")).time()
+
+        # Block all orders outside regular market hours (9:30–16:00 ET)
+        # Alpaca rejects market orders after hours; paper mode just queues them
+        # which causes ghost fills at unexpected prices
+        if not (dtime(9, 30) <= now_et < dtime(16, 0)):
+            return f"outside market hours ({now_et.strftime('%H:%M')} ET) — skipping"
+
         # Block BUYs in first 30 min after market open — opening volatility
         # causes tight stops to trigger immediately on valid entries
-        if decision.direction == "BUY":
-            from zoneinfo import ZoneInfo
-            from datetime import time as dtime
-            now_et = datetime.now(ZoneInfo("America/New_York")).time()
-            if dtime(9, 30) <= now_et < dtime(10, 0):
-                return "opening range buffer (9:30–10:00 AM ET) — waiting for volatility to settle"
+        if decision.direction == "BUY" and now_et < dtime(10, 0):
+            return "opening range buffer (9:30–10:00 AM ET) — waiting for volatility to settle"
+
+        # Block orders that recently failed — prevents retry storms
+        from datetime import timedelta
+        key = (decision.ticker, decision.direction)
+        last_fail = self._failed_order_times.get(key)
+        if last_fail:
+            elapsed = datetime.now(timezone.utc) - last_fail
+            cooldown = timedelta(minutes=self.FAILED_ORDER_COOLDOWN_MIN)
+            if elapsed < cooldown:
+                remaining = int((cooldown - elapsed).total_seconds() / 60)
+                return (f"{decision.ticker} {decision.direction} failed recently — "
+                        f"retry blocked for {remaining}m more")
 
         return ""
 

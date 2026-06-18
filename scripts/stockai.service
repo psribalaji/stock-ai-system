@@ -5,7 +5,7 @@
 #          sudo systemctl start stockai
 
 [Unit]
-Description=StockAI Paper Trading Pipeline
+Description=StockAI Trading Pipeline
 After=network.target
 
 [Service]

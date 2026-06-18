@@ -48,11 +48,19 @@ def render_sentiment_page() -> None:
                 pos = (news_df["sentiment"] > 0.2).sum()
                 neg = (news_df["sentiment"] < -0.2).sum()
 
-                c1, c2, c3 = st.columns(3)
-                color = "🟢" if avg > 0.1 else "🔴" if avg < -0.1 else "⚪"
-                c1.metric("Avg Sentiment", f"{color} {avg:.3f}")
-                c2.metric("Positive", pos)
-                c3.metric("Negative", neg)
+                # Sentiment label badge
+                if avg > 0.1:
+                    label = "🟢 Bullish"
+                elif avg < -0.1:
+                    label = "🔴 Bearish"
+                else:
+                    label = "⚪ Neutral"
+
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Sentiment", label)
+                c2.metric("Score", f"{avg:+.3f}", help="-1.0 = very bearish, +1.0 = very bullish")
+                c3.metric("Positive Articles", pos)
+                c4.metric("Negative Articles", neg)
 
             if "headline" in news_df.columns:
                 display_cols = [c for c in ["datetime", "headline", "sentiment", "source"] if c in news_df.columns]

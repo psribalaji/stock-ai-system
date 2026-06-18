@@ -20,15 +20,16 @@ class TradingConfig(BaseModel):
 class AssetsConfig(BaseModel):
     stocks: List[str] = []
     crypto: List[str] = []
+    etfs: List[str] = []
     watchlist: List[str] = []
 
     @property
     def all_tradeable(self) -> List[str]:
-        return self.stocks + self.crypto
+        return self.stocks + self.crypto + self.etfs
 
     @property
     def all_symbols(self) -> List[str]:
-        return self.stocks + self.crypto + self.watchlist
+        return self.stocks + self.crypto + self.etfs + self.watchlist
 
 class RiskConfig(BaseModel):
     max_position_pct: float = 0.05
@@ -41,6 +42,20 @@ class RiskConfig(BaseModel):
     reward_risk_ratio: float = 2.0
     daily_loss_limit: float = 0.02
     max_drawdown_pct: float = 0.15
+    max_portfolio_corr: float = 0.70
+
+class LiveRiskConfig(BaseModel):
+    """Tighter risk settings used when trading.mode = live."""
+    max_position_pct: float = 0.04
+    max_sector_pct: float = 0.30
+    max_crypto_pct: float = 0.10
+    max_open_positions: int = 5
+    min_confidence: float = 0.70
+    stop_loss_pct: float = 0.06
+    trailing_stop_atr_mult: float = 3.0
+    reward_risk_ratio: float = 2.0
+    daily_loss_limit: float = 0.015
+    max_drawdown_pct: float = 0.08
     max_portfolio_corr: float = 0.70
 
 class SignalsConfig(BaseModel):
@@ -82,6 +97,7 @@ class DataConfig(BaseModel):
     storage_path: str = "./data"
     s3_bucket: str = "stock-ai-system-data"
     s3_prefix: str = "market-data"
+    s3_bucket_live: str = "stock-ai-system-live"
     sync_to_s3: bool = False
     s3_role_arn: str = ""
     polygon_timeframe: str = "day"
@@ -131,6 +147,7 @@ class AppConfig(BaseModel):
     trading: TradingConfig = Field(default_factory=TradingConfig)
     assets: AssetsConfig = Field(default_factory=AssetsConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
+    live_risk: LiveRiskConfig = Field(default_factory=LiveRiskConfig)
     signals: SignalsConfig = Field(default_factory=SignalsConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
     quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig)
@@ -149,6 +166,16 @@ class AppConfig(BaseModel):
     @property
     def is_paper(self) -> bool:
         return self.trading.mode == "paper"
+
+    @property
+    def effective_risk(self) -> RiskConfig:
+        """Return live_risk when in live mode, otherwise paper risk config."""
+        return self.live_risk if self.is_live else self.risk  # type: ignore[return-value]
+
+    @property
+    def s3_bucket_effective(self) -> str:
+        """Return the correct S3 bucket for the current trading mode."""
+        return self.data.s3_bucket_live if self.is_live else self.data.s3_bucket
 
 
 # ── Loader ───────────────────────────────────────────────────────

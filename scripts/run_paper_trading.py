@@ -96,7 +96,7 @@ def main() -> None:
 
     mode_label = "[yellow]DRY-RUN (one-shot)[/yellow]" if args.dry_run_now else f"[yellow]{cfg.trading.mode.upper()}[/yellow]"
     console.print(Panel.fit(
-        "[bold cyan]StockAI — Paper Trading[/bold cyan]\n"
+        f"[bold cyan]StockAI — {cfg.trading.mode.upper()} Trading[/bold cyan]\n"
         f"Mode: {mode_label}  |  "
         f"Universe: {', '.join(cfg.assets.all_tradeable)}\n"
         f"Signal interval: every {cfg.schedule.signal_interval_min} min (market hours)",
@@ -136,9 +136,10 @@ def main() -> None:
     for job_id in scheduler.get_jobs():
         console.print(f"  • {job_id}")
 
+    account_label = "live account" if cfg.is_live else "paper account"
     console.print(
-        "\n[green]✓ Paper trading started — press Ctrl+C to stop[/green]\n"
-        "[dim]Orders will be submitted to Alpaca paper account automatically "
+        f"\n[green]✓ {cfg.trading.mode.upper()} trading started — press Ctrl+C to stop[/green]\n"
+        f"[dim]Orders will be submitted to Alpaca {account_label} automatically "
         "during market hours (9:30am–4:00pm ET, Mon–Fri)[/dim]\n"
     )
 
@@ -226,7 +227,7 @@ def _handle_decisions(decisions, executor: OrderExecutor, display_callback) -> N
     """Submit approved decisions as paper orders, then display results."""
     approved = [d for d in decisions if d.approved]
     if not approved:
-        logger.info("[PaperTrading] Pipeline ran — no approved decisions this cycle")
+        logger.info("[Trading] Pipeline ran — no approved decisions this cycle")
         return
 
     # Display signal summary

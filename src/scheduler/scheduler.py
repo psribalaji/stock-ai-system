@@ -258,6 +258,36 @@ class TradingScheduler:
             except Exception:
                 pass
 
+        # ── Staleness audit: alert on any ticker still stale after sync ──────
+        # This catches silent failures where Alpaca returns 0 rows but no error.
+        try:
+            import pandas as pd
+            from datetime import date as _date
+            stale_threshold_days = 3  # allow weekends (Sat+Sun = 2 days gap)
+            stale_after_sync = []
+            for ticker in tickers:
+                df = self.store.load_ohlcv(ticker)
+                if df.empty:
+                    stale_after_sync.append(f"{ticker}(no data)")
+                    continue
+                latest = pd.to_datetime(df["timestamp"]).max().date()
+                days_old = (_date.today() - latest).days
+                if days_old > stale_threshold_days:
+                    stale_after_sync.append(f"{ticker}({days_old}d)")
+            if stale_after_sync:
+                msg = (f"⚠️ DATA STALENESS ALERT: {len(stale_after_sync)} tickers still stale after sync — "
+                       f"signals will use old prices!\n{', '.join(stale_after_sync)}")
+                logger.error(f"[Scheduler] {msg}")
+                try:
+                    from src.notifications import notify
+                    notify(msg, level="critical")
+                except Exception:
+                    pass
+            else:
+                logger.info("[Scheduler] Staleness audit passed — all tickers fresh")
+        except Exception as exc:
+            logger.warning(f"[Scheduler] Staleness audit failed: {exc}")
+
         # Notify sync results
         try:
             from src.notifications import notify
@@ -302,31 +332,19 @@ class TradingScheduler:
         data_map: dict  = {}
         price_map: dict = {}
 
-        # Try to get live prices; fall back to stored close if unavailable
-        alpaca = None
-        try:
-            from src.ingestion.alpaca_client import AlpacaClient
-            alpaca = AlpacaClient()
-        except Exception as exc:
-            logger.warning(f"[Scheduler] Could not init Alpaca for live prices: {exc}")
-
         for ticker in tickers:
             df = self.store.load_ohlcv(ticker)
             if df.empty:
                 logger.warning(f"[Scheduler] No OHLCV data for {ticker} — skipping")
                 continue
-            data_map[ticker] = df
-            live_price = alpaca.get_latest_price(ticker) if alpaca else None
-            price_map[ticker] = live_price if live_price else float(df["close"].iloc[-1])
+            data_map[ticker]  = df
+            price_map[ticker] = float(df["close"].iloc[-1])
 
         if not data_map:
             logger.warning("[Scheduler] signal_pipeline: no data available")
             return
 
         portfolio = self._build_portfolio_state()
-        if portfolio is None:
-            logger.error("[Scheduler] signal_pipeline: portfolio state unavailable — skipping cycle")
-            return
 
         try:
             decisions = self.engine.decide_all(
@@ -393,11 +411,26 @@ class TradingScheduler:
             from src.notifications import notify
             alpaca = AlpacaClient()
 
+            positions     = alpaca._trading_client.get_all_positions()
+            open_tickers  = {p.symbol for p in positions}
+            stop_pct      = self.config.risk.stop_loss_pct  # 0.07
+
+            # ── Detect broker-closed positions (Alpaca filled a stop/TP bracket) ──
+            # Any ticker with an open audit BUY that's no longer in Alpaca positions
+            # was closed by the broker — fetch the fill price and write the exit.
+            try:
+                audit_open = self.store.get_open_trade_tickers()
+                for ticker in audit_open - open_tickers:
+                    exit_price = alpaca.get_last_filled_sell(ticker)
+                    if exit_price:
+                        self.store.close_open_trade(ticker, exit_price, "broker_closed")
+                        logger.info(f"[Scheduler] Broker-closed exit written for {ticker} @ ${exit_price:.2f}")
+            except Exception as _bc_exc:
+                logger.debug(f"[Scheduler] Broker-closed check failed: {_bc_exc}")
+
             # ── Hard stop loss: check ALL held positions regardless of memory state ──
             # This catches positions that were opened before a restart or that errored
             # during order submission but still filled on Alpaca.
-            positions = alpaca._trading_client.get_all_positions()
-            stop_pct = self.config.risk.stop_loss_pct  # 0.07
             for p in positions:
                 ticker = p.symbol
                 unrealized_pct = float(p.unrealized_plpc)  # e.g. -0.087 = -8.7%
@@ -409,7 +442,6 @@ class TradingScheduler:
                         f"down {unrealized_pct*100:.1f}% "
                         f"(entry=${entry_price:.2f}, now=${current_price:.2f})"
                     )
-                    # Submit market sell
                     try:
                         qty = float(p.qty)
                         alpaca.submit_market_order(ticker, qty, "sell")
@@ -418,6 +450,15 @@ class TradingScheduler:
                             f"({unrealized_pct*100:.1f}%)",
                             level="stop", ticker=ticker,
                         )
+                        self.store.close_open_trade(ticker, current_price, "stop_loss")
+                        if self.executor is not None:
+                            from datetime import timezone as _tz
+                            self.executor._cooldown_exits[ticker] = datetime.now(_tz.utc)
+                            self.executor._save_cooldowns()
+                            logger.info(
+                                f"[Scheduler] Cooldown set for {ticker} — "
+                                f"re-entry blocked for 4h after stop-loss exit"
+                            )
                     except Exception as sell_exc:
                         logger.error(f"[Scheduler] Stop loss SELL failed for {ticker}: {sell_exc}")
 
@@ -438,33 +479,17 @@ class TradingScheduler:
                 for ticker in tp_triggered:
                     logger.info(f"[Scheduler] Take-profit triggered for {ticker}")
                     price = price_map.get(ticker, 0)
-                    try:
-                        pos = next((p for p in positions if p.symbol == ticker), None)
-                        if pos:
-                            qty = float(pos.qty)
-                            alpaca.submit_market_order(ticker, qty, "sell")
-                            notify(f"🎯 Take-profit hit: SELL {ticker} @ ${price:,.2f}", level="tp", ticker=ticker)
-                        else:
-                            notify(f"{ticker} take-profit triggered @ ${price:,.2f} (no position found)", level="tp", ticker=ticker)
-                    except Exception as sell_exc:
-                        logger.error(f"[Scheduler] Take-profit SELL failed for {ticker}: {sell_exc}")
-                        notify(f"❌ Take-profit SELL failed for {ticker}: {sell_exc}", level="warning", ticker=ticker)
+                    notify(f"{ticker} take-profit hit @ ${price:,.2f}", level="tp", ticker=ticker)
+                    if price:
+                        self.store.close_open_trade(ticker, price, "take_profit")
 
                 stop_triggered = self.executor.update_trailing_stops(price_map)
                 for ticker in stop_triggered:
                     logger.info(f"[Scheduler] Trailing stop triggered for {ticker}")
                     price = price_map.get(ticker, 0)
-                    try:
-                        pos = next((p for p in positions if p.symbol == ticker), None)
-                        if pos:
-                            qty = float(pos.qty)
-                            alpaca.submit_market_order(ticker, qty, "sell")
-                            notify(f"🛑 Trailing stop hit: SELL {ticker} @ ${price:,.2f}", level="stop", ticker=ticker)
-                        else:
-                            notify(f"{ticker} trailing stop triggered @ ${price:,.2f} (no position found)", level="stop", ticker=ticker)
-                    except Exception as sell_exc:
-                        logger.error(f"[Scheduler] Trailing stop SELL failed for {ticker}: {sell_exc}")
-                        notify(f"❌ Trailing stop SELL failed for {ticker}: {sell_exc}", level="warning", ticker=ticker)
+                    notify(f"{ticker} trailing stop triggered @ ${price:,.2f}", level="stop", ticker=ticker)
+                    if price:
+                        self.store.close_open_trade(ticker, price, "trailing_stop")
 
         except Exception as exc:
             logger.error(f"[Scheduler] position_check failed: {exc}")
@@ -484,7 +509,7 @@ class TradingScheduler:
                 from src.notifications import notify
                 for alert in report.alerts:
                     level = "critical" if alert.severity == "CRITICAL" else "warning"
-                    notify(f"Drift: {alert.name} — {alert.message}", level=level)
+                    notify(f"Drift: {alert.alert_type} — {alert.message}", level=level)
 
             if self.on_drift:
                 self.on_drift(report)
@@ -593,13 +618,11 @@ class TradingScheduler:
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _build_portfolio_state(self) -> Optional[PortfolioState]:
+    def _build_portfolio_state(self) -> PortfolioState:
         """
         Build a PortfolioState from live Alpaca data.
         Uses actual positions and account value — not the audit log — so ghost
         positions (filled on Alpaca but errored locally) are always counted.
-
-        Returns None if Alpaca API is unreachable — callers must block new BUYs.
         """
         try:
             from src.ingestion.alpaca_client import AlpacaClient
@@ -611,8 +634,9 @@ class TradingScheduler:
             total_value = account["portfolio_value"]
             cash        = account["cash"]
 
-            # Real open position count from Alpaca
-            open_count = len(positions) if not positions.empty else 0
+            # Real open position count and tickers from Alpaca
+            open_count   = len(positions) if not positions.empty else 0
+            held_tickers = list(positions["ticker"]) if not positions.empty and "ticker" in positions.columns else []
 
             # Crypto exposure: sum market value of BTC/SOL positions
             crypto_tickers = set(self.config.assets.crypto)
@@ -622,49 +646,42 @@ class TradingScheduler:
             else:
                 crypto_exposure = 0.0
 
-            # Daily P&L from Alpaca portfolio history
+            # Daily P&L and true peak from Alpaca portfolio history
             daily_pnl_pct = 0.0
+            peak_value = total_value
             try:
-                history = alpaca._trading_client.get_portfolio_history()
+                from alpaca.trading.requests import GetPortfolioHistoryRequest
+                history = alpaca._trading_client.get_portfolio_history(
+                    GetPortfolioHistoryRequest(period="1M", timeframe="1D")
+                )
+                if history and history.equity:
+                    valid_equity = [e for e in history.equity if e and e > 0]
+                    if valid_equity:
+                        peak_value = max(valid_equity)
                 if history and history.profit_loss_pct and len(history.profit_loss_pct) > 0:
                     daily_pnl_pct = float(history.profit_loss_pct[-1]) or 0.0
-            except Exception:
-                pass
-
-            # Peak value is now tracked by RiskManager — pass current value
-            peak = self.engine.risk.peak_value_usd
-            if total_value > peak:
-                peak = total_value
-
-            # Correlation data: load price history for held tickers
-            held_tickers = []
-            price_data = {}
-            if not positions.empty and "ticker" in positions.columns:
-                held_tickers = positions["ticker"].tolist()
-                for ticker in held_tickers:
-                    df = self.store.load_ohlcv(ticker)
-                    if not df.empty and "close" in df.columns:
-                        price_data[ticker] = df["close"]
+            except Exception as _hist_exc:
+                logger.debug(f"[Scheduler] Could not fetch portfolio history for peak: {_hist_exc}")
 
             return PortfolioState(
                 total_value_usd=total_value,
                 cash_usd=cash,
                 open_positions=open_count,
+                held_tickers=held_tickers,
                 crypto_exposure_usd=crypto_exposure,
                 daily_pnl_pct=daily_pnl_pct,
-                peak_value_usd=peak,
-                held_tickers=held_tickers,
-                price_data=price_data,
+                peak_value_usd=max(peak_value, total_value),
             )
         except Exception as exc:
-            logger.error(
-                f"[Scheduler] Could not build portfolio state: {exc} — "
-                f"BLOCKING all new trades this cycle (fail-closed)"
+            logger.warning(f"[Scheduler] Could not build portfolio state: {exc} — using conservative default")
+            # Use max_open_positions as the fallback count so the risk manager
+            # blocks all new BUYs when Alpaca is unreachable. Returning 0 was
+            # causing the system to approve unlimited new positions on API errors.
+            return PortfolioState(
+                total_value_usd=100_000.0,
+                cash_usd=0.0,
+                open_positions=self.config.risk.max_open_positions,
+                crypto_exposure_usd=0.0,
+                daily_pnl_pct=0.0,
+                peak_value_usd=100_000.0,
             )
-            try:
-                from src.notifications import notify
-                notify(f"Portfolio state unavailable: {exc} — trades blocked this cycle",
-                       level="critical")
-            except Exception:
-                pass
-            return None

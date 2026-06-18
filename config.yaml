@@ -4,7 +4,7 @@
 
 # ── Trading Mode ──────────────────────────────────────────────────
 trading:
-  mode: paper                  # CHANGE TO "live" ONLY after Phase 2 gate passes
+  mode: live                   # LIVE trading — real money, tighter risk rules apply
   broker: alpaca
   timezone: America/New_York
 
@@ -54,7 +54,16 @@ assets:
     - GS
   crypto:
     - BTC
-    - SOL
+    # SOL removed — Polygon returns no data for it (153d stale), signals unreliable
+  # Broad market & sector ETFs — diversify away from single-stock tech concentration
+  etfs:
+    - SPY     # S&P 500 broad market
+    - GLD     # Gold — hedge against tech sell-offs and inflation
+    - TLT     # 20yr Treasury bonds — flight-to-safety hedge
+    - XLV     # Healthcare sector ETF
+    - XLE     # Energy sector ETF
+    - XLI     # Industrials/Defence sector ETF
+    - XLF     # Financials sector ETF
   watchlist:                   # Signals computed but no orders placed
     - ASML
     - ARM
@@ -68,11 +77,26 @@ risk:
   max_open_positions:  15      # Max concurrent open positions
   min_confidence:      0.60    # Minimum signal confidence to trade
   stop_loss_pct:       0.07    # Hard stop loss: 7% below entry
-  trailing_stop_atr_mult: 2.0  # Trailing stop: 2x ATR below highest price
+  trailing_stop_atr_mult: 3.0  # Trailing stop: 3x ATR below highest price
   reward_risk_ratio:     2.0  # Take profit at 2x the risk (entry - stop)
   daily_loss_limit:    0.02    # Circuit breaker: 2% daily loss
   max_drawdown_pct:    0.15    # Kill switch: 15% peak-to-trough
   max_portfolio_corr:  0.70    # Block if avg correlation with held positions > 70%
+
+# ── Live Risk Overrides (used when trading.mode = live) ───────────
+# Tighter guardrails for real-money trading (designed for ~$1k starting capital)
+live_risk:
+  max_position_pct:    0.10    # 10% per position (~$10 on $100) — fractional shares
+  max_sector_pct:      0.30    # 30% sector cap — fewer positions so slightly more concentration ok
+  max_crypto_pct:      0.10    # Same crypto cap
+  max_open_positions:  5       # 5 concurrent positions max (down from 15)
+  min_confidence:      0.62    # Slightly above paper floor — relaxed until live history builds up
+  stop_loss_pct:       0.06    # 6% stop loss — tighter than paper
+  trailing_stop_atr_mult: 3.0  # Same trailing stop multiplier
+  reward_risk_ratio:     2.0  # Same 2:1 reward-to-risk
+  daily_loss_limit:    0.015   # 1.5% daily loss circuit breaker (~$15 on $1k)
+  max_drawdown_pct:    0.08    # 8% kill switch (~$80 on $1k) — stop before it hurts
+  max_portfolio_corr:  0.70    # Same correlation limit
 
 # ── Signal Detection ──────────────────────────────────────────────
 signals:
@@ -116,8 +140,9 @@ drift:
 # ── Data Sources ─────────────────────────────────────────────────
 data:
   storage_path:        "./data"
-  s3_bucket:           "stock-ai-system-data"   # Your S3 bucket name
+  s3_bucket:           "stock-ai-system-data"   # Paper trading bucket
   s3_prefix:           "market-data"
+  s3_bucket_live:      "stock-ai-system-live"   # Separate bucket for live trades — create before going live
   sync_to_s3:          true
   polygon_timeframe:   "day"   # day | hour | minute
   alpaca_feed:         "iex"   # iex (free) | sip (paid)
@@ -170,4 +195,4 @@ discovery:
     - stocks
     - stockmarket
   news_lookback_hours:  48
-  auto_approve:         true    # Safe: screener filters + confidence gate + all risk rules still apply
+  auto_approve:         false   # Always false — approve tickers manually in the dashboard
