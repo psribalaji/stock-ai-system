@@ -156,6 +156,10 @@ class DecisionEngine:
         # and the system can approve far more than max_open_positions BUYs in
         # a single cycle.
         batch_buys = 0
+        # Track tickers approved for BUY this cycle so the duplicate-buy guard
+        # in risk_manager blocks a second strategy's BUY on the same ticker
+        # within the same pipeline run (Alpaca positions haven't updated yet).
+        batch_bought_tickers: set[str] = set()
 
         for ticker in tickers:
             df = data_map.get(ticker, pd.DataFrame())
@@ -167,12 +171,16 @@ class DecisionEngine:
                 continue
 
             try:
+                effective_held = list(portfolio.held_tickers or []) + list(batch_bought_tickers)
                 effective_portfolio = dataclasses.replace(
                     portfolio,
                     open_positions=portfolio.open_positions + batch_buys,
+                    held_tickers=effective_held,
                 )
                 decisions = self.decide(ticker, df, price, effective_portfolio, news)
-                batch_buys += sum(1 for d in decisions if d.direction == "BUY")
+                approved_buys = [d for d in decisions if d.approved and d.direction == "BUY"]
+                batch_buys += len(approved_buys)
+                batch_bought_tickers.update(d.ticker for d in approved_buys)
                 all_decisions.extend(decisions)
             except Exception as exc:
                 logger.error(f"[DecisionEngine] Failed for {ticker}: {exc}")
