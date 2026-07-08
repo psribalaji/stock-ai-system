@@ -283,8 +283,8 @@ class FeatureEngine:
         """
         # Regime: 1 = bull (price > 200d MA + low vol), 0 = bear/uncertain
         df["bull_regime"] = (
-            (df["close"] > df["sma_200"]) &
-            (df["hvol_20"] < df["hvol_20"].rolling(60).mean())
+            (df["close"] > df["sma_50"]) &
+            (df["sma_50"] > df["sma_200"])
         ).fillna(False).astype(int)
 
         # Composite regime score 0–5 (higher = more bullish conditions)
