@@ -55,8 +55,8 @@ class ConfidenceScorer:
     PATTERN_DEFAULTS: dict[str, float] = {
         # Momentum
         "rsi_oversold_macd_cross_up":   0.62,
-        "macd_cross_up_high_volume":    0.58,
-        "strong_roc_bull_regime":       0.55,
+        "macd_cross_up_high_volume":    0.62,  # raised: vol-confirmed MACD cross is reliable
+        "strong_roc_bull_regime":       0.62,  # raised: passes with vol spike (×1.05=0.651), blocks without (×0.95=0.589)
         "rsi_overbought_macd_cross_down": 0.60,
         "macd_cross_down_below_ema":    0.57,
         "strong_neg_roc_bear_regime":   0.54,
@@ -70,8 +70,8 @@ class ConfidenceScorer:
         "trend_weakening":              0.55,
         # Volatility breakout
         "bb_squeeze_breakout_up":       0.67,
-        "bb_upper_breakout":            0.59,
-        "vol_expansion_bull":           0.56,
+        "bb_upper_breakout":            0.62,  # raised: breakouts above upper BB are reliable entry signals
+        "vol_expansion_bull":           0.62,  # raised: vol expansion in bull regime + vol spike = strong signal
         "bb_squeeze_breakout_down":     0.66,
         "bb_lower_breakdown":           0.58,
         "vol_expansion_bear":           0.55,
