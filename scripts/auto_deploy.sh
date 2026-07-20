@@ -31,6 +31,15 @@ fi
 # Install any new dependencies quietly
 $VENV/pip install -r requirements.txt --quiet 2>/dev/null
 
+# Sync service file — copy repo version to systemd and reload if it changed
+INSTALLED="/etc/systemd/system/$SERVICE.service"
+REPO_SERVICE="$REPO_DIR/scripts/$SERVICE.service"
+if ! diff -q "$REPO_SERVICE" "$INSTALLED" > /dev/null 2>&1; then
+    echo "$(date): Service file changed — reloading systemd"
+    sudo cp "$REPO_SERVICE" "$INSTALLED"
+    sudo systemctl daemon-reload
+fi
+
 # Restart the service
 sudo systemctl restart $SERVICE
 if [ $? -eq 0 ]; then
