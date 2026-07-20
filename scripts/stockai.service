@@ -11,7 +11,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/stock-ai-system
 EnvironmentFile=/home/ubuntu/stock-ai-system/.env
-ExecStart=/home/ubuntu/stock-ai-system/.venv/bin/python scripts/run_live_trading.py
+ExecStart=/home/ubuntu/stock-ai-system/.venv/bin/python scripts/run_paper_trading.py
 Restart=always
 RestartSec=30
 
