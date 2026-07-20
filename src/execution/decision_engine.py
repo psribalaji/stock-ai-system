@@ -113,6 +113,23 @@ class DecisionEngine:
             logger.info(f"[DecisionEngine] All signals blocked (low confidence) for {ticker}")
             return []
 
+        # ── Step 2b: Deduplicate by direction — keep highest-confidence signal per direction ──
+        # Multiple strategies can fire BUY on the same ticker in one cycle; executing all
+        # would give 3× the intended position size. One signal per direction is enough.
+        best_by_direction: dict[str, ScoredSignal] = {}
+        for s in passed:
+            existing = best_by_direction.get(s.direction)
+            if existing is None or s.confidence > existing.confidence:
+                best_by_direction[s.direction] = s
+        deduped = list(best_by_direction.values())
+        if len(deduped) < len(passed):
+            skipped = len(passed) - len(deduped)
+            logger.info(
+                f"[DecisionEngine] {ticker}: deduplicated {skipped} lower-confidence "
+                f"signal(s) — keeping best per direction"
+            )
+        passed = deduped
+
         # ── Step 3: Risk validation ───────────────────────────────────
         decisions: List[TradeDecision] = []
         for signal in passed:
