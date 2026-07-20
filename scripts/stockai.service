@@ -1,8 +1,6 @@
-# scripts/stockai.service — systemd service for StockAI paper trading.
-# Install: sudo cp scripts/stockai.service /etc/systemd/system/stockai.service
-#          sudo systemctl daemon-reload
-#          sudo systemctl enable stockai
-#          sudo systemctl start stockai
+# scripts/stockai.service — systemd service for StockAI LIVE trading.
+# Managed automatically by scripts/auto_deploy.sh — do not edit the installed
+# copy directly; edit this file and push to GitHub instead.
 
 [Unit]
 Description=StockAI Trading Pipeline
@@ -13,7 +11,7 @@ Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/stock-ai-system
 EnvironmentFile=/home/ubuntu/stock-ai-system/.env
-ExecStart=/home/ubuntu/stock-ai-system/.venv/bin/python scripts/run_paper_trading.py
+ExecStart=/home/ubuntu/stock-ai-system/.venv/bin/python scripts/run_live_trading.py
 Restart=always
 RestartSec=30
 
