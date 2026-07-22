@@ -113,22 +113,34 @@ class DecisionEngine:
             logger.info(f"[DecisionEngine] All signals blocked (low confidence) for {ticker}")
             return []
 
-        # ── Step 2b: Deduplicate by direction — keep highest-confidence signal per direction ──
-        # Multiple strategies can fire BUY on the same ticker in one cycle; executing all
-        # would give 3× the intended position size. One signal per direction is enough.
+        # ── Step 2b: Deduplicate — one signal per direction, then resolve BUY/SELL conflicts ──
+        # Multiple strategies can fire BUY (or SELL) on the same ticker in one cycle;
+        # executing all would give 3× the intended position size.
         best_by_direction: dict[str, ScoredSignal] = {}
         for s in passed:
             existing = best_by_direction.get(s.direction)
             if existing is None or s.confidence > existing.confidence:
                 best_by_direction[s.direction] = s
-        deduped = list(best_by_direction.values())
-        if len(deduped) < len(passed):
-            skipped = len(passed) - len(deduped)
+        if len(best_by_direction) < len(passed):
             logger.info(
-                f"[DecisionEngine] {ticker}: deduplicated {skipped} lower-confidence "
-                f"signal(s) — keeping best per direction"
+                f"[DecisionEngine] {ticker}: deduplicated {len(passed) - len(best_by_direction)} "
+                f"lower-confidence signal(s) — keeping best per direction"
             )
-        passed = deduped
+
+        # Conflict resolution: if strategies disagree on direction, keep only the
+        # highest-confidence signal. Executing both would sell then immediately re-buy
+        # (or vice versa), churning the position and eating spread on every cycle.
+        if len(best_by_direction) > 1:
+            winner = max(best_by_direction.values(), key=lambda s: s.confidence)
+            loser  = [s for s in best_by_direction.values() if s is not winner][0]
+            logger.info(
+                f"[DecisionEngine] {ticker}: BUY/SELL conflict — "
+                f"{winner.direction} wins (conf={winner.confidence:.3f}, {winner.strategy}) "
+                f"over {loser.direction} (conf={loser.confidence:.3f}, {loser.strategy})"
+            )
+            passed = [winner]
+        else:
+            passed = list(best_by_direction.values())
 
         # ── Step 3: Risk validation ───────────────────────────────────
         decisions: List[TradeDecision] = []
