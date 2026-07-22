@@ -108,29 +108,28 @@ class OrderExecutor:
                 seen[key] = d
         decisions = list(seen.values())
 
-        # Strategy conflict resolution: suppress mean_reversion SELL when any
-        # directional strategy (trend_following / volatility_breakout) says BUY on
-        # the same ticker. Mean_reversion is a short-term oscillation signal; if the
-        # broader trend strategies disagree, honoring the sell churns the position
-        # and re-incurs spread/slippage on what is likely a valid uptrend.
-        directional_buys = {
-            d.ticker for d in decisions
-            if d.direction == "BUY" and d.strategy in ("trend_following", "volatility_breakout")
-        }
-        suppressed: set[tuple] = set()
+        # Conflict resolution: if the same ticker has both a BUY and SELL decision,
+        # keep only the highest-confidence direction. Executing both causes the executor
+        # to buy then immediately sell (or vice versa), churning the position and eating
+        # spread on every 30-min cycle. This is a safety net — DecisionEngine.decide()
+        # should already resolve conflicts, but this catches any path that bypasses it.
+        ticker_decisions: dict[str, list] = {}
         for d in decisions:
-            if (d.direction == "SELL"
-                    and d.strategy == "mean_reversion"
-                    and d.ticker in directional_buys):
-                suppressed.add((d.ticker, d.direction, d.strategy))
+            ticker_decisions.setdefault(d.ticker, []).append(d)
+        resolved: list = []
+        for ticker, decs in ticker_decisions.items():
+            if len(decs) > 1:
+                winner = max(decs, key=lambda x: x.confidence)
+                dropped = [d.direction for d in decs if d is not winner]
                 logger.info(
-                    f"[OrderExecutor] SUPPRESSED mean_reversion SELL for {d.ticker} "
-                    f"— directional BUY is active (trend takes priority over oscillation)"
+                    f"[OrderExecutor] {ticker}: BUY/SELL conflict — "
+                    f"keeping {winner.direction} (conf={winner.confidence:.3f}), "
+                    f"dropping {dropped}"
                 )
-        decisions = [
-            d for d in decisions
-            if (d.ticker, d.direction, d.strategy) not in suppressed
-        ]
+                resolved.append(winner)
+            else:
+                resolved.extend(decs)
+        decisions = resolved
 
         results = []
         submitted_this_batch = set()
@@ -552,6 +551,10 @@ class OrderExecutor:
             held_tickers = set(positions["ticker"].tolist()) if not positions.empty else set()
         except Exception as exc:
             logger.warning(f"[OrderExecutor] Could not fetch positions for {decision.ticker}: {exc}")
+            # Fail safe: block SELL (unknown position state → would short accidentally),
+            # allow BUY through (worst case: duplicate position, caught next cycle).
+            if decision.direction == "SELL":
+                return f"position state unknown (API error) — blocking SELL to prevent accidental short"
             return ""
 
         if decision.direction == "BUY" and decision.ticker in held_tickers:
