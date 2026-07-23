@@ -257,12 +257,23 @@ def _handle_decisions(decisions, executor: OrderExecutor, display_callback) -> N
         f"[red]{len(failed)} failed[/red]"
     )
 
+    from src.notifications import notify as _notify
     for r in submitted:
         console.print(
             f"  [green]✓[/green] {r.direction} {r.qty:.2f}x {r.ticker} "
             f"@ ~${r.entry_price:.2f}  stop=${r.stop_loss_price:.2f}  "
             f"order_id={r.order_id}"
         )
+        d = decision_map.get(r.ticker)
+        _notify(
+            f"{r.ticker} {r.direction} @ ${r.fill_price or r.entry_price:,.2f} "
+            f"({d.strategy if d else r.strategy}, conf={d.confidence:.2f if d else 0:.2f}) "
+            f"— ORDER SUBMITTED",
+            level="trade" if r.direction == "BUY" else "sell",
+            ticker=r.ticker,
+        )
+    for r in skipped:
+        logger.debug(f"[Trading] Skipped {r.ticker} {r.direction}: {r.error}")
     for r in failed:
         console.print(f"  [red]✗[/red] {r.ticker}: {r.error}")
 

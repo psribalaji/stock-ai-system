@@ -377,15 +377,8 @@ class TradingScheduler:
                     df_out = self.engine.decisions_to_dataframe(decisions)
                     self.store.save_signals(df_out)
                     logger.info(f"[Scheduler] Pipeline: {len(decisions)} decision(s) saved")
-
-                    for d in decisions:
-                        notify(
-                            f"{d.ticker} {d.direction} @ ${d.entry_price:,.2f} "
-                            f"({d.strategy}, conf={d.confidence:.2f})",
-                            level="trade" if d.direction == "BUY" else "sell",
-                            ticker=d.ticker,
-                            data={"confidence": d.confidence, "strategy": d.strategy},
-                        )
+                    # No per-decision notify here — executor sends the real notification
+                    # after confirming the order actually submitted (skipped orders are silent).
                 else:
                     logger.info("[Scheduler] Pipeline: no approved decisions this cycle")
                     notify(
