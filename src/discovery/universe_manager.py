@@ -75,11 +75,36 @@ class UniverseManager:
             if not st.passed:
                 continue
 
-            # Skip if ticker already present with active (non-EXPIRED) status
-            existing_mask = (df["ticker"] == st.ticker) & (df["status"] != STATUS_EXPIRED)
-            if not df.empty and existing_mask.any():
-                logger.debug(f"[UniverseManager] {st.ticker} already in watchlist — skipping")
-                continue
+            if not df.empty:
+                existing_mask = df["ticker"] == st.ticker
+                if existing_mask.any():
+                    existing_status = df.loc[existing_mask, "status"].iloc[-1]
+
+                    if existing_status in (STATUS_APPROVED,):
+                        # Already in the trading pipeline — don't touch it
+                        logger.debug(f"[UniverseManager] {st.ticker} already APPROVED — skipping")
+                        continue
+
+                    if existing_status == STATUS_IGNORED:
+                        # User explicitly ignored — respect that decision
+                        logger.debug(f"[UniverseManager] {st.ticker} IGNORED by user — skipping")
+                        continue
+
+                    if existing_status == STATUS_CANDIDATE:
+                        # Re-trending: refresh mention spike + sentiment so dashboard shows fresh data
+                        idx = df.index[existing_mask][-1]
+                        df.loc[idx, "mention_spike"] = st.trending_data.mention_spike
+                        df.loc[idx, "avg_sentiment"] = st.trending_data.avg_sentiment
+                        df.loc[idx, "sources"]       = ",".join(st.trending_data.sources)
+                        df.loc[idx, "latest_price"]  = st.latest_price
+                        logger.debug(
+                            f"[UniverseManager] {st.ticker} refreshed as CANDIDATE "
+                            f"(spike={st.trending_data.mention_spike:.1f}x)"
+                        )
+                        added += 1  # count as "surfaced" for the scan summary
+                        continue
+
+                    # STATUS_EXPIRED — fall through to re-add as fresh candidate
 
             sources_str = ",".join(st.trending_data.sources)
             auto = self._auto_approve
