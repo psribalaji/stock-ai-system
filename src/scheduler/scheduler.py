@@ -260,20 +260,53 @@ class TradingScheduler:
 
         # ── Staleness audit: alert on any ticker still stale after sync ──────
         # This catches silent failures where Alpaca returns 0 rows but no error.
+        # Discovery tickers stale >30 days are auto-ignored (delisted / bad symbol).
         try:
             import pandas as pd
             from datetime import date as _date
+            from src.config import get_config as _get_config
             stale_threshold_days = 3  # allow weekends (Sat+Sun = 2 days gap)
+            auto_ignore_days     = 30 # discovery tickers with no data this long → ignore
             stale_after_sync = []
+            config_tickers = set(_get_config().assets.all_tradeable)
+
             for ticker in tickers:
                 df = self.store.load_ohlcv(ticker)
                 if df.empty:
-                    stale_after_sync.append(f"{ticker}(no data)")
+                    days_old = 999
+                else:
+                    latest   = pd.to_datetime(df["timestamp"]).max().date()
+                    days_old = (_date.today() - latest).days
+
+                if days_old <= stale_threshold_days:
                     continue
-                latest = pd.to_datetime(df["timestamp"]).max().date()
-                days_old = (_date.today() - latest).days
-                if days_old > stale_threshold_days:
-                    stale_after_sync.append(f"{ticker}({days_old}d)")
+
+                # Auto-ignore permanently-stale discovery tickers
+                if ticker not in config_tickers and days_old >= auto_ignore_days:
+                    try:
+                        from src.discovery.universe_manager import UniverseManager
+                        um = UniverseManager()
+                        if um.ignore(ticker):
+                            logger.warning(
+                                f"[Scheduler] Auto-ignored discovery ticker {ticker} "
+                                f"— no fetchable data for {days_old}d"
+                            )
+                            try:
+                                from src.notifications import notify
+                                notify(
+                                    f"Auto-ignored {ticker}: no market data for {days_old} days "
+                                    f"(likely delisted or bad symbol)",
+                                    level="warning",
+                                )
+                            except Exception:
+                                pass
+                            continue  # removed from universe, skip alert
+                    except Exception as ign_exc:
+                        logger.warning(f"[Scheduler] Could not auto-ignore {ticker}: {ign_exc}")
+
+                suffix = "(no data)" if df.empty else f"({days_old}d)"
+                stale_after_sync.append(f"{ticker}{suffix}")
+
             if stale_after_sync:
                 msg = (f"⚠️ DATA STALENESS ALERT: {len(stale_after_sync)} tickers still stale after sync — "
                        f"signals will use old prices!\n{', '.join(stale_after_sync)}")

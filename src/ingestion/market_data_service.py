@@ -174,7 +174,7 @@ class MarketDataService:
                         results[ticker] = len(df)
                         logger.info(f"{ticker}: +{len(df)} new bars (Polygon backfill)")
                     else:
-                        results[ticker] = 0
+                        results[ticker] = -1
                         logger.warning(f"{ticker}: Polygon returned no data (start={start_dates[ticker]})")
                     _time.sleep(13.0)  # Polygon free tier: 5 calls/min
                 except Exception as e:
