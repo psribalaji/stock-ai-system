@@ -124,9 +124,10 @@ class ConfidenceScorer:
         bull_regime = bool(feats.get("bull_regime", 0))
         regime_mult = 1.0 if bull_regime else 0.85
 
-        # 3. Volume adjustment
+        # 3. Volume adjustment (1.2 threshold per config — lowered from 1.5)
+        # Penalty reduced: 0.98 not 0.95, so average-volume days still produce signals
         high_volume = bool(feats.get("high_volume", 0))
-        vol_mult = 1.05 if high_volume else 0.95
+        vol_mult = 1.05 if high_volume else 0.98
 
         # 4. Sentiment adjustment: map -1.0..1.0 → 0.70..1.10
         sentiment_mult = 1.0 + (sentiment_score * 0.10)

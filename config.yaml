@@ -102,7 +102,7 @@ live_risk:
 signals:
   lookback_days:       252     # 1 year of history for pattern matching
   confidence_lookback: 60      # Days to compute rolling win rate
-  min_volume_ratio:    1.5     # Signal requires volume > 1.5x 20-day avg
+  min_volume_ratio:    1.2     # Signal requires volume > 1.2x 20-day avg (lowered from 1.5 — too few vol spikes in slow markets)
   rsi_oversold:        35      # RSI below this = potential buy signal
   rsi_overbought:      70      # RSI above this = potential sell signal
   ma_short:            50      # Short moving average period
@@ -188,7 +188,7 @@ discovery:
   min_avg_volume:       500000
   min_price:            5.0
   max_candidates:       20
-  mention_spike_factor: 3.0
+  mention_spike_factor: 2.0
   reddit_subreddits:
     - wallstreetbets
     - investing
