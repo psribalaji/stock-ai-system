@@ -19,15 +19,31 @@ from src.discovery.universe_manager import UniverseManager, STATUS_APPROVED, STA
 KEEP = {
     # Current open positions — never demote these
     "GL", "TD",
-    # High-conviction large caps already in discovery with proven track record
-    "GOOG", "SHOP", "UBER", "COIN", "DDOG", "PYPL", "RBLX",
-    "ADBE", "DOCU", "OKTA", "TEAM", "AXON", "PANW", "CRSP",
-    "MRVL", "MU", "AMAT", "LRCX", "NXPI", "TXN",
-    "WMT", "COST", "TGT", "NKE", "MCD", "CMG",
-    "MA", "MS", "CME", "IBM",
-    "SPOT", "RDDT", "SNAP",
-    "MELI", "BABA", "NIO",
-    "NVTS", "SMCI", "DELL", "HPE",
+    # Cybersecurity
+    "PANW", "CRWD", "AXON", "ZS", "OKTA",
+    # Cloud / SaaS
+    "DDOG", "TEAM", "WDAY", "SNOW", "VEEV", "MDB", "GTLB",
+    "TTD", "ADBE", "DOCU", "TWLO",
+    # Fintech / Payments
+    "COIN", "PYPL", "AFRM", "HOOD", "SOFI", "MA",
+    # Consumer tech / Entertainment
+    "SHOP", "UBER", "ABNB", "DASH", "DUOL", "RBLX",
+    "SPOT", "NFLX", "RDDT", "SNAP",
+    # Semis / Hardware
+    "MRVL", "MU", "AMAT", "LRCX", "NXPI", "TXN", "NVTS", "SMCI",
+    "DELL", "HPE", "SNDK", "SNPS", "KLAC",
+    # Energy / Industrial
+    "VRT", "VST", "FSLR", "GE", "CEG",
+    # Healthcare / Biotech
+    "CRSP", "NVO", "INTU",
+    # International / Macro
+    "GOOG", "MELI", "BABA", "NIO",
+    # Finance / Diversified
+    "MS", "CME", "IBM",
+    # Consumer staples / Retail
+    "WMT", "COST", "TGT", "NKE", "MCD", "CMG", "SBUX", "LULU",
+    # Other quality large-caps in watchlist
+    "OXY", "IONQ", "RKLB", "MSTR", "RIOT", "MARA",
 }
 
 
