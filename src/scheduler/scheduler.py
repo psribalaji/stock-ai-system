@@ -600,8 +600,8 @@ class TradingScheduler:
             if added > 0:
                 for s in passed[:5]:
                     notify(
-                        f"{s.ticker} discovered — {s.mention_spike:.1f}x spike, "
-                        f"sentiment {s.avg_sentiment:+.2f}",
+                        f"{s.ticker} discovered — {s.trending_data.mention_spike:.1f}x spike, "
+                        f"sentiment {s.trending_data.avg_sentiment:+.2f}",
                         level="discovery", ticker=s.ticker,
                     )
                 if added > 5:
