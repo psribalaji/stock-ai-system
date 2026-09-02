@@ -267,7 +267,7 @@ def _handle_decisions(decisions, executor: OrderExecutor, display_callback) -> N
         d = decision_map.get(r.ticker)
         _notify(
             f"{r.ticker} {r.direction} @ ${r.fill_price or r.entry_price:,.2f} "
-            f"({d.strategy if d else r.strategy}, conf={d.confidence:.2f if d else 0:.2f}) "
+            f"({d.strategy if d else r.strategy}, conf={(d.confidence if d else 0):.2f}) "
             f"— ORDER SUBMITTED",
             level="trade" if r.direction == "BUY" else "sell",
             ticker=r.ticker,
