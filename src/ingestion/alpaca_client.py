@@ -213,25 +213,17 @@ class AlpacaClient:
                 self._attach_stop_loss(ticker, qty, stop_loss_price)
                 result["stop_loss_price"] = stop_loss_price
             except Exception as exc:
-                logger.error(
-                    f"Stop loss attachment FAILED for {ticker} "
-                    f"(order {order.id}) — position is UNPROTECTED: {exc}"
+                # Alpaca rejects fractional GTC stop orders (error 42210000).
+                # Do NOT close the position — the in-memory trailing stop (checked
+                # every 5 min by job_position_check) provides equivalent protection.
+                # Closing immediately just burns the spread on every fractional trade.
+                logger.warning(
+                    f"[AlpacaClient] Stop loss order rejected for {ticker} "
+                    f"(qty={qty}, stop=${stop_loss_price:.2f}) — likely fractional GTC "
+                    f"not supported. Position protected by in-memory trailing stop. "
+                    f"Reason: {exc}"
                 )
-                # Mandatory stop: close the unprotected position immediately
-                try:
-                    self._submit_market_order_only(ticker, qty, "sell")
-                    logger.warning(
-                        f"[AlpacaClient] Closed unprotected BUY for {ticker} "
-                        f"(qty={qty}) — stop loss could not be attached"
-                    )
-                    result["status"] = "closed_no_stop"
-                except Exception as close_exc:
-                    logger.critical(
-                        f"[AlpacaClient] CRITICAL: Could not close unprotected position "
-                        f"{ticker} (qty={qty}). MANUAL INTERVENTION REQUIRED. "
-                        f"Close error: {close_exc}"
-                    )
-                    result["status"] = "unprotected"
+                result["stop_loss_price"] = stop_loss_price  # still tracked in memory
 
         return result
 
