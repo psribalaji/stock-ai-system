@@ -588,7 +588,12 @@ class TradingScheduler:
             candidates = scanner.scan()
             screened   = screener.screen(candidates)
             passed     = [s for s in screened if s.passed]
-            added      = manager.add_candidates(passed)
+
+            # Filter out tickers already in config universe — no need to re-discover them
+            config_tickers = set(self.config.assets.all_tradeable)
+            truly_new = [s for s in passed if s.ticker not in config_tickers]
+
+            added = manager.add_candidates(truly_new)
             manager.expire_old(days=14)
 
             logger.info(
@@ -596,9 +601,36 @@ class TradingScheduler:
                 f"{len(passed)} passed screening, {added} new candidates added"
             )
 
+            # Immediately fetch OHLCV for newly approved tickers so they can
+            # trade in the next signal cycle without waiting until 5am data sync.
+            if added > 0:
+                new_tickers = [s.ticker for s in truly_new]
+                try:
+                    from src.ingestion.market_data_service import MarketDataService
+                    from datetime import date, timedelta
+                    svc = MarketDataService()
+                    for ticker in new_tickers:
+                        if self.store.load_ohlcv(ticker).empty:
+                            logger.info(f"[Discovery] Fetching OHLCV for new ticker {ticker}")
+                            try:
+                                df = svc.polygon.fetch_daily_bars(
+                                    ticker,
+                                    date.today() - timedelta(days=365),
+                                    date.today(),
+                                )
+                                if not df.empty:
+                                    self.store.save_ohlcv(ticker, df)
+                                    logger.info(f"[Discovery] {ticker}: fetched {len(df)} bars — ready for signals")
+                                else:
+                                    logger.warning(f"[Discovery] {ticker}: Polygon returned no data")
+                            except Exception as fetch_exc:
+                                logger.warning(f"[Discovery] OHLCV fetch failed for {ticker}: {fetch_exc}")
+                except Exception as exc:
+                    logger.warning(f"[Discovery] Post-approval data fetch failed: {exc}")
+
             from src.notifications import notify
             if added > 0:
-                for s in passed[:5]:
+                for s in truly_new[:5]:
                     notify(
                         f"{s.ticker} discovered — {s.trending_data.mention_spike:.1f}x spike, "
                         f"sentiment {s.trending_data.avg_sentiment:+.2f}",
