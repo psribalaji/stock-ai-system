@@ -515,21 +515,46 @@ class TradingScheduler:
                         price_map[ticker] = price
 
             if price_map:
+                held_qty = {p.symbol: float(p.qty) for p in positions}
+
+                def _exit_position(ticker: str, price: float, reason: str, emoji: str) -> None:
+                    """Submit the SELL, notify, record the exit, and set cooldown."""
+                    qty = held_qty.get(ticker)
+                    if not qty:
+                        logger.warning(
+                            f"[Scheduler] {reason} for {ticker} but no Alpaca position "
+                            f"found — skipping SELL (stale in-memory state)"
+                        )
+                        return
+                    try:
+                        alpaca.submit_market_order(ticker, qty, "sell")
+                        logger.info(
+                            f"[Scheduler] {reason} SELL submitted for {ticker}: "
+                            f"qty={qty} @ ~${price:.2f}"
+                        )
+                    except Exception as sell_exc:
+                        logger.error(f"[Scheduler] {reason} SELL FAILED for {ticker}: {sell_exc}")
+                        return  # don't record an exit that didn't happen
+
+                    notify(f"{emoji} {ticker} {reason} @ ${price:,.2f}",
+                           level="stop", ticker=ticker)
+                    self.store.close_open_trade(ticker, price, reason)
+                    if self.executor is not None:
+                        from datetime import timezone as _tz
+                        self.executor._cooldown_exits[ticker] = datetime.now(_tz.utc)
+                        self.executor._save_cooldowns()
+
                 tp_triggered = self.executor.check_take_profits(price_map)
                 for ticker in tp_triggered:
-                    logger.info(f"[Scheduler] Take-profit triggered for {ticker}")
                     price = price_map.get(ticker, 0)
-                    notify(f"{ticker} take-profit hit @ ${price:,.2f}", level="tp", ticker=ticker)
                     if price:
-                        self.store.close_open_trade(ticker, price, "take_profit")
+                        _exit_position(ticker, price, "take_profit", "🎯")
 
                 stop_triggered = self.executor.update_trailing_stops(price_map)
                 for ticker in stop_triggered:
-                    logger.info(f"[Scheduler] Trailing stop triggered for {ticker}")
                     price = price_map.get(ticker, 0)
-                    notify(f"{ticker} trailing stop triggered @ ${price:,.2f}", level="stop", ticker=ticker)
                     if price:
-                        self.store.close_open_trade(ticker, price, "trailing_stop")
+                        _exit_position(ticker, price, "trailing_stop", "🛑")
 
         except Exception as exc:
             logger.error(f"[Scheduler] position_check failed: {exc}")

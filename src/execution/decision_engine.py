@@ -228,9 +228,12 @@ class DecisionEngine:
     ) -> TradeDecision:
         """Run risk check + LLM enrichment for a single scored signal."""
 
-        # Risk validation
+        # Risk validation — pass ATR so trailing stops are volatility-scaled.
+        # Without this the risk manager defaults atr_value=0.0, which collapses
+        # the trailing stop onto the current price (see update_trailing_stops).
+        atr_value = float(signal.features_snapshot.get("atr_14") or 0.0)
         risk_decision: RiskDecision = self.risk.validate(
-            signal, entry_price, portfolio, ticker
+            signal, entry_price, portfolio, ticker, atr_value=atr_value
         )
 
         # LLM enrichment (only if approved and LLM is available)

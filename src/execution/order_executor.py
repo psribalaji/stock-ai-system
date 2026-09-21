@@ -299,10 +299,18 @@ class OrderExecutor:
             if price is None:
                 continue
 
-            # Trail up: if price made a new high, raise the stop
+            # Trail up: if price made a new high, raise the stop.
+            # If ATR is unavailable, fall back to a percentage trail — otherwise
+            # the stop would be set to the price itself and self-trigger instantly.
             if price > state["high_water"]:
+                atr = state.get("atr") or 0.0
+                if atr > 0:
+                    new_stop = price - (mult * atr)
+                else:
+                    new_stop = price * (1 - self.config.risk.stop_loss_pct)
                 state["high_water"] = price
-                state["stop_price"] = price - (mult * state["atr"])
+                # Never lower an existing stop
+                state["stop_price"] = max(state["stop_price"], new_stop)
                 self._save_trailing_stops()
                 logger.debug(
                     f"[OrderExecutor] Trailing stop raised for {ticker}: "
