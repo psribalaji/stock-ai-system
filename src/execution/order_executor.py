@@ -439,8 +439,14 @@ class OrderExecutor:
                 # Request 45 calendar days (~30 trading days) — a 14-period ATR needs
                 # at least 15 bars, and 20 calendar days only yields ~12 after
                 # weekends and holidays, which silently skipped the ATR entirely.
+                # High-water must reflect the peak seen *while holding*, which we
+                # cannot recover after a restart. Use max(entry, current) — never the
+                # pre-entry window high, which would place the stop above the current
+                # price and force an immediate spurious exit on a profitable position.
                 atr = 0.0
-                high_water = float(row["current_price"])
+                entry_price = float(row["avg_entry_price"])
+                current_price = float(row["current_price"])
+                high_water = max(entry_price, current_price)
                 try:
                     bars = self._get_client().get_recent_bars(ticker, days=45)
                     if not bars.empty and len(bars) >= 15:
@@ -453,7 +459,6 @@ class OrderExecutor:
                         atr_val = tr.rolling(14).mean().iloc[-1]
                         if pd.notna(atr_val) and atr_val > 0:
                             atr = float(atr_val)
-                        high_water = float(bars["high"].max())  # real high-water from bars
                     else:
                         logger.warning(
                             f"[OrderExecutor] {ticker}: only {len(bars)} bars available "
@@ -466,7 +471,17 @@ class OrderExecutor:
                 if atr > 0:
                     stop = high_water - mult * atr
                 else:
-                    stop = float(row["avg_entry_price"]) * (1 - self.config.risk.stop_loss_pct)
+                    stop = entry_price * (1 - self.config.risk.stop_loss_pct)
+
+                # Safety net: a restored stop must never sit at or above the current
+                # price, or the next position check would sell immediately.
+                max_stop = current_price * (1 - self.config.risk.stop_loss_pct)
+                if stop >= current_price:
+                    logger.warning(
+                        f"[OrderExecutor] {ticker}: computed stop ${stop:.2f} >= current "
+                        f"${current_price:.2f} — clamping to ${max_stop:.2f}"
+                    )
+                    stop = max_stop
 
                 self._trailing_stops[ticker] = {
                     "high_water": high_water,
