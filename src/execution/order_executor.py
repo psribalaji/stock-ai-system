@@ -435,22 +435,32 @@ class OrderExecutor:
                     skipped += 1  # disk state is current — nothing to do
                     continue
 
-                # Fetch recent bars to get ATR; fall back to hard stop if unavailable
+                # Fetch recent bars to get ATR; fall back to hard stop if unavailable.
+                # Request 45 calendar days (~30 trading days) — a 14-period ATR needs
+                # at least 15 bars, and 20 calendar days only yields ~12 after
+                # weekends and holidays, which silently skipped the ATR entirely.
                 atr = 0.0
                 high_water = float(row["current_price"])
                 try:
-                    bars = self._get_client().get_recent_bars(ticker, days=20)
-                    if not bars.empty and len(bars) >= 14:
+                    bars = self._get_client().get_recent_bars(ticker, days=45)
+                    if not bars.empty and len(bars) >= 15:
                         h = bars["high"]
                         l = bars["low"]
                         c = bars["close"]
                         tr = pd.concat(
                             [h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1
                         ).max(axis=1)
-                        atr = float(tr.rolling(14).mean().iloc[-1])
+                        atr_val = tr.rolling(14).mean().iloc[-1]
+                        if pd.notna(atr_val) and atr_val > 0:
+                            atr = float(atr_val)
                         high_water = float(bars["high"].max())  # real high-water from bars
-                except Exception:
-                    pass
+                    else:
+                        logger.warning(
+                            f"[OrderExecutor] {ticker}: only {len(bars)} bars available "
+                            f"— using percentage stop instead of ATR"
+                        )
+                except Exception as exc:
+                    logger.warning(f"[OrderExecutor] ATR fetch failed for {ticker}: {exc}")
 
                 mult = self.config.risk.trailing_stop_atr_mult
                 if atr > 0:
