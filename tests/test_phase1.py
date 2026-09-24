@@ -475,10 +475,10 @@ class TestConfidenceScorer:
         assert result.regime_multiplier == 1.0
 
     def test_bear_regime_multiplier(self, scorer, raw_buy, buy_features):
-        """Non-bull regime should give multiplier = 0.92 (softened from 0.85)."""
+        """Non-bull regime should give per-ticker multiplier = 0.85."""
         bear_feats = {**buy_features, "bull_regime": 0.0}
         result = scorer.score(raw_buy, "TEST", features=bear_feats)
-        assert result.regime_multiplier == 0.92
+        assert result.regime_multiplier == 0.85
 
     def test_high_volume_multiplier(self, scorer, raw_buy, buy_features):
         """High volume → multiplier 1.05."""
@@ -502,7 +502,7 @@ class TestConfidenceScorer:
             features_snapshot={**buy_features, "bull_regime": 0.0, "high_volume": 0.0},
         )
         result = scorer.score(low_signal, "TEST")
-        # 0.52 * 0.92 * 0.98 ≈ 0.47 → still below 0.60 → blocked
+        # 0.52 * 0.85 * 0.98 ≈ 0.43 → below 0.60 → blocked
         assert result.blocked is True
         assert len(result.block_reason) > 0
 
@@ -989,6 +989,24 @@ class TestDecisionEngine:
         """Empty DataFrame → empty list."""
         result = engine.decide("TEST", pd.DataFrame(), 100.0, healthy_portfolio)
         assert result == []
+
+    def test_regime_gate_blocks_buys_in_downtrend(self, engine, sample_ohlcv, healthy_portfolio):
+        """market_bullish=False must block all BUY decisions (regime gate)."""
+        decisions = engine.decide(
+            "TEST", sample_ohlcv, 120.0, healthy_portfolio, market_bullish=False
+        )
+        assert all(d.direction != "BUY" for d in decisions)
+
+    def test_market_regime_bullish_when_above_200sma(self, engine):
+        """_market_regime is True when the proxy close is above its 200-day SMA."""
+        up = pd.DataFrame({"close": list(range(1, 261))})       # rising → close >> 200SMA
+        down = pd.DataFrame({"close": list(range(260, 0, -1))})  # falling → close << 200SMA
+        assert engine._market_regime({"QQQ": up}) is True
+        assert engine._market_regime({"QQQ": down}) is False
+
+    def test_market_regime_fails_open_without_proxy(self, engine):
+        """No QQQ/SPY history → assume bullish (gate inactive), never silently halt."""
+        assert engine._market_regime({}) is True
 
     def test_decide_all_approved_are_trade_decisions(self, engine, sample_ohlcv, healthy_portfolio):
         """All returned decisions should be TradeDecision instances."""

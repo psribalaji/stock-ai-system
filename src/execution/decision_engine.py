@@ -84,16 +84,21 @@ class DecisionEngine:
         entry_price: float,
         portfolio: PortfolioState,
         news_summary: Optional[str] = None,
+        market_bullish: bool = True,
     ) -> List[TradeDecision]:
         """
         Run full pipeline for a single ticker and return approved decisions.
 
         Args:
-            ticker:       Ticker symbol (e.g. "NVDA")
-            df:           OHLCV DataFrame (features computed internally if missing)
-            entry_price:  Current market price for position sizing + stop loss
-            portfolio:    Current portfolio state for risk checks
-            news_summary: Optional news text for LLM enrichment
+            ticker:         Ticker symbol (e.g. "NVDA")
+            df:             OHLCV DataFrame (features computed internally if missing)
+            entry_price:    Current market price for position sizing + stop loss
+            portfolio:      Current portfolio state for risk checks
+            news_summary:   Optional news text for LLM enrichment
+            market_bullish: Broad-market regime. When False (index below its
+                            200-day MA), new BUY signals are hard-blocked — the
+                            system does not open longs into a market downtrend.
+                            SELL/exit signals are unaffected.
 
         Returns:
             List of approved TradeDecision objects (may be empty).
@@ -112,6 +117,21 @@ class DecisionEngine:
         if not passed:
             logger.info(f"[DecisionEngine] All signals blocked (low confidence) for {ticker}")
             return []
+
+        # ── Step 2a: Hard regime gate ─────────────────────────────────
+        # In a broad-market downtrend (index < 200-day MA) do not open new longs.
+        # Trend-following longs bought into a downtrend are the lowest-expectancy
+        # trades; SELL/exit signals are left untouched so positions can still close.
+        if not market_bullish:
+            longs = [s for s in passed if s.direction == "BUY"]
+            if longs:
+                logger.info(
+                    f"[DecisionEngine] {ticker}: market in downtrend — "
+                    f"blocking {len(longs)} BUY signal(s) (regime gate)"
+                )
+            passed = [s for s in passed if s.direction != "BUY"]
+            if not passed:
+                return []
 
         # ── Step 2b: Deduplicate — one signal per direction, then resolve BUY/SELL conflicts ──
         # Multiple strategies can fire BUY (or SELL) on the same ticker in one cycle;
@@ -164,6 +184,7 @@ class DecisionEngine:
         price_map: dict,            # {ticker: float}
         portfolio: PortfolioState,
         news_map: Optional[dict] = None,   # {ticker: str}
+        market_bullish: Optional[bool] = None,
     ) -> List[TradeDecision]:
         """
         Run the pipeline for all tickers in the asset universe.
@@ -174,10 +195,18 @@ class DecisionEngine:
             price_map: Dict mapping ticker → current price
             portfolio: Shared portfolio state
             news_map:  Optional dict mapping ticker → news summary
+            market_bullish: Broad-market regime. If None, it is derived from a
+                            market proxy (QQQ, else SPY) in data_map: bullish when
+                            its close is above its 200-day SMA. When False, new
+                            longs are hard-blocked for every ticker this cycle.
 
         Returns:
             Combined list of approved TradeDecision objects.
         """
+        if market_bullish is None:
+            market_bullish = self._market_regime(data_map)
+        logger.info(f"[DecisionEngine] Market regime: {'BULLISH' if market_bullish else 'DOWNTREND — new longs blocked'}")
+
         all_decisions: List[TradeDecision] = []
         # Track BUYs approved so far this batch so the position-limit check
         # sees an up-to-date count for each subsequent ticker. Without this,
@@ -206,7 +235,10 @@ class DecisionEngine:
                     open_positions=portfolio.open_positions + batch_buys,
                     held_tickers=effective_held,
                 )
-                decisions = self.decide(ticker, df, price, effective_portfolio, news)
+                decisions = self.decide(
+                    ticker, df, price, effective_portfolio, news,
+                    market_bullish=market_bullish,
+                )
                 approved_buys = [d for d in decisions if d.approved and d.direction == "BUY"]
                 batch_buys += len(approved_buys)
                 batch_bought_tickers.update(d.ticker for d in approved_buys)
@@ -217,6 +249,35 @@ class DecisionEngine:
         return all_decisions
 
     # ── Internal helpers ──────────────────────────────────────────────
+
+    # Market-regime proxies, in preference order. First one present in data_map
+    # with >=200 bars decides the broad-market regime.
+    _MARKET_PROXIES = ("QQQ", "SPY")
+
+    def _market_regime(self, data_map: dict) -> bool:
+        """
+        Return True if the broad market is in an uptrend (proxy close > 200-day SMA).
+
+        Fails OPEN (returns True) when no proxy with enough history is available,
+        so a data gap never silently halts all trading — it just logs a warning.
+        """
+        for proxy in self._MARKET_PROXIES:
+            df = data_map.get(proxy)
+            if df is None or df.empty or "close" not in df.columns or len(df) < 200:
+                continue
+            close = float(df["close"].iloc[-1])
+            sma200 = float(df["close"].tail(200).mean())
+            bullish = close > sma200
+            logger.debug(
+                f"[DecisionEngine] Regime proxy {proxy}: close={close:.2f} "
+                f"vs 200SMA={sma200:.2f} -> {'bull' if bullish else 'down'}"
+            )
+            return bullish
+        logger.warning(
+            "[DecisionEngine] No market proxy (QQQ/SPY) with 200+ bars in data_map "
+            "— assuming bullish (regime gate inactive this cycle)"
+        )
+        return True
 
     def _process_signal(
         self,
