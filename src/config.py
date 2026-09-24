@@ -43,6 +43,10 @@ class RiskConfig(BaseModel):
     daily_loss_limit: float = 0.02
     max_drawdown_pct: float = 0.15
     max_portfolio_corr: float = 0.70
+    # Volatility-targeted sizing: a name whose ATR% equals this reference gets the
+    # full max_position_pct; more volatile names are scaled down proportionally
+    # (never scaled above the cap). 0 disables vol-targeting.
+    reference_atr_pct: float = 0.03
 
 class LiveRiskConfig(BaseModel):
     """Tighter risk settings used when trading.mode = live."""
@@ -57,6 +61,7 @@ class LiveRiskConfig(BaseModel):
     daily_loss_limit: float = 0.015
     max_drawdown_pct: float = 0.08
     max_portfolio_corr: float = 0.70
+    reference_atr_pct: float = 0.03
 
 class SignalsConfig(BaseModel):
     lookback_days: int = 252

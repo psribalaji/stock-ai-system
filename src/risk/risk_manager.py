@@ -204,8 +204,22 @@ class RiskManager:
                     f"Crypto exposure {crypto_pct:.2%} approaching limit {cfg.max_crypto_pct:.2%}"
                 )
 
-        # ── 6. Position sizing ────────────────────────────────────────
+        # ── 6. Position sizing (volatility-targeted) ──────────────────
+        # Start from the max cap, then scale DOWN for names more volatile than
+        # the reference ATR%, so risk-per-trade is roughly constant. Never scale
+        # above the cap. Falls back to the flat cap when ATR is unavailable or
+        # vol-targeting is disabled (reference_atr_pct <= 0).
         position_pct = cfg.max_position_pct
+        ref_atr_pct = getattr(cfg, "reference_atr_pct", 0.0)
+        if ref_atr_pct > 0 and atr_value > 0 and entry_price > 0:
+            atr_pct = atr_value / entry_price
+            if atr_pct > ref_atr_pct:
+                vol_scale = ref_atr_pct / atr_pct
+                position_pct = cfg.max_position_pct * vol_scale
+                notes.append(
+                    f"Vol-scaled size: ATR {atr_pct:.2%} > ref {ref_atr_pct:.2%} "
+                    f"→ {position_pct:.2%} (×{vol_scale:.2f})"
+                )
         position_usd = portfolio.total_value_usd * position_pct
 
         # Cap at available cash

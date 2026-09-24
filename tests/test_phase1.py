@@ -598,6 +598,24 @@ class TestRiskManager:
         decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST")
         from src.config import get_config; assert decision.position_size_pct <= get_config().effective_risk.max_position_pct
 
+    def test_vol_targeting_scales_down_high_atr(self, rm, scored_buy, healthy_portfolio):
+        """A name with ATR% above the reference gets a smaller position."""
+        from src.config import get_config
+        max_pct = get_config().effective_risk.max_position_pct
+        ref = get_config().effective_risk.reference_atr_pct   # 0.03
+        # entry 100, ATR 6 → atr_pct 6% = 2x ref → half size
+        decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST", atr_value=6.0)
+        assert decision.approved is True
+        assert decision.position_size_pct == pytest.approx(max_pct * (ref / 0.06), rel=1e-3)
+
+    def test_vol_targeting_full_size_for_low_atr(self, rm, scored_buy, healthy_portfolio):
+        """A calm name (ATR% below reference) stays at the full cap."""
+        from src.config import get_config
+        max_pct = get_config().effective_risk.max_position_pct
+        # entry 100, ATR 1 → atr_pct 1% < ref → no scaling
+        decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST", atr_value=1.0)
+        assert decision.position_size_pct == pytest.approx(max_pct, rel=1e-3)
+
     def test_stop_loss_calculated(self, rm, scored_buy, healthy_portfolio):
         """Stop loss should be stop_loss_pct below entry."""
         from src.config import get_config

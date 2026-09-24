@@ -82,6 +82,7 @@ risk:
   daily_loss_limit:    0.02    # Circuit breaker: 2% daily loss
   max_drawdown_pct:    0.15    # Kill switch: 15% peak-to-trough
   max_portfolio_corr:  0.70    # Block if avg correlation with held positions > 70%
+  reference_atr_pct:   0.03    # Vol-targeting: ATR% for full-size position; more volatile → scaled down. 0 = off
 
 # ── Live Risk Overrides (used when trading.mode = live) ───────────
 # Tighter guardrails for real-money trading (designed for ~$1k starting capital)
@@ -97,6 +98,7 @@ live_risk:
   daily_loss_limit:    0.015   # 1.5% daily loss circuit breaker (~$15 on $1k)
   max_drawdown_pct:    0.08    # 8% kill switch (~$80 on $1k) — stop before it hurts
   max_portfolio_corr:  0.70    # Same correlation limit
+  reference_atr_pct:   0.03    # Vol-targeting: ATR% for full-size position; more volatile → scaled down. 0 = off
 
 # ── Signal Detection ──────────────────────────────────────────────
 signals:
