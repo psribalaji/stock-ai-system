@@ -4,9 +4,11 @@ fundamental and tradability criteria.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from pathlib import Path
 from typing import Optional
 
 from loguru import logger
@@ -55,6 +57,30 @@ class StockScreener:
         self._min_avg_volume  = getattr(disc, "min_avg_volume",  500_000)     if disc else 500_000
         self._min_price       = getattr(disc, "min_price",       5.0)         if disc else 5.0
 
+        # Per-day metric cache: market cap / volume / price barely change intraday,
+        # so we fetch each ticker from Polygon at most ONCE per day. This is the
+        # main defence against Polygon free-tier 429s — the scheduler re-scans the
+        # same trending tickers every 30 min, and without this every scan re-hit
+        # the API. Keyed by ticker; file rotates by date.
+        storage = getattr(self.config.data, "storage_path", "./data")
+        self._cache_path = Path(storage) / "discovery" / f"screen_cache_{date.today().isoformat()}.json"
+        self._metric_cache: dict[str, dict] = self._load_cache()
+
+    def _load_cache(self) -> dict[str, dict]:
+        try:
+            if self._cache_path.exists():
+                return json.loads(self._cache_path.read_text())
+        except Exception as exc:
+            logger.debug(f"[StockScreener] Could not load screen cache: {exc}")
+        return {}
+
+    def _save_cache(self) -> None:
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            self._cache_path.write_text(json.dumps(self._metric_cache))
+        except Exception as exc:
+            logger.debug(f"[StockScreener] Could not save screen cache: {exc}")
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def screen(self, candidates: list[TrendingTicker]) -> list[ScreenedTicker]:
@@ -78,29 +104,33 @@ class StockScreener:
     def _screen_one(self, tt: TrendingTicker) -> ScreenedTicker:
         """Screen a single TrendingTicker against all 4 criteria."""
         fail_reasons: list[str] = []
-        market_cap    = 0.0
-        avg_volume    = 0.0
-        latest_price  = 0.0
 
-        # Check 1: Market cap — also captures sector/name from same Polygon call
-        market_cap, cap_ok, cap_reason, sector, company_name = self._check_market_cap(tt.ticker)
-        if not cap_ok:
-            fail_reasons.append(cap_reason)
-        time.sleep(1.0)   # Polygon free tier: 5 req/min → need ≥1s between calls
+        # Fundamentals/price come from cache when available (0 Polygon calls),
+        # otherwise 2 Polygon calls (details + 30d bars) with free-tier pacing.
+        m = self._get_metrics(tt.ticker)
+        market_cap   = m["market_cap"]
+        avg_volume   = m["avg_volume"]
+        latest_price = m["latest_price"]
+        sector       = m["sector"]
+        company_name = m["company_name"]
 
+        # Check 1: Market cap
+        if market_cap < self._min_market_cap:
+            fail_reasons.append(
+                f"Market cap ${market_cap:,.0f} < minimum ${self._min_market_cap:,.0f}"
+            )
         # Check 2: Volume
-        avg_volume, vol_ok, vol_reason = self._check_volume(tt.ticker)
-        if not vol_ok:
-            fail_reasons.append(vol_reason)
-        time.sleep(1.0)
-
+        if avg_volume < self._min_avg_volume:
+            fail_reasons.append(
+                f"Avg volume {avg_volume:,.0f} < minimum {self._min_avg_volume:,.0f}"
+            )
         # Check 3: Price
-        latest_price, price_ok, price_reason = self._check_price(tt.ticker)
-        if not price_ok:
-            fail_reasons.append(price_reason)
-        time.sleep(1.0)
+        if latest_price < self._min_price:
+            fail_reasons.append(
+                f"Price ${latest_price:.2f} < minimum ${self._min_price:.2f}"
+            )
 
-        # Check 4: Alpaca tradability (no Polygon call — no sleep needed)
+        # Check 4: Alpaca tradability (no Polygon call)
         tradeable, trade_reason = self._check_tradeable_on_alpaca(tt.ticker)
         if not tradeable:
             fail_reasons.append(trade_reason)
@@ -119,92 +149,64 @@ class StockScreener:
             trending_data  = tt,
         )
 
-    def _check_market_cap(self, ticker: str) -> tuple[float, bool, str, str, str]:
+    def _get_metrics(self, ticker: str) -> dict:
         """
-        Check if market cap meets minimum threshold.
-        Also returns sector and company name from the same Polygon call (no extra cost).
+        Return {market_cap, avg_volume, latest_price, sector, company_name} for a
+        ticker, served from the per-day cache when present (no Polygon calls).
 
-        Args:
-            ticker: Stock symbol.
-
-        Returns:
-            (market_cap, passed, reason_string, sector, company_name)
+        On a cache miss, makes 2 Polygon calls (ticker details + a single 30-day
+        daily-bars fetch reused for both volume and last price), paces them for
+        the free tier, and caches the result for the rest of the day.
         """
+        if ticker in self._metric_cache:
+            return self._metric_cache[ticker]
+
+        market_cap, sector, company_name = self._fetch_details(ticker)
+        time.sleep(1.0)   # pace between the two Polygon calls
+        avg_volume, latest_price = self._fetch_volume_and_price(ticker)
+
+        metrics = {
+            "market_cap":   market_cap,
+            "avg_volume":   avg_volume,
+            "latest_price": latest_price,
+            "sector":       sector,
+            "company_name": company_name,
+        }
+        self._metric_cache[ticker] = metrics
+        self._save_cache()
+        return metrics
+
+    def _fetch_details(self, ticker: str) -> tuple[float, str, str]:
+        """Fetch (market_cap, sector, company_name) via one Polygon call."""
         try:
             details      = self._polygon._client.get_ticker_details(ticker)
             market_cap   = float(getattr(details, "market_cap", 0) or 0)
             sector       = getattr(details, "sic_description", None) or "Unknown"
             company_name = getattr(details, "name", None) or "Unknown"
-            if market_cap >= self._min_market_cap:
-                return (market_cap, True, "", sector, company_name)
-            return (
-                market_cap, False,
-                f"Market cap ${market_cap:,.0f} < minimum ${self._min_market_cap:,.0f}",
-                sector, company_name,
-            )
+            return (market_cap, sector, company_name)
         except Exception as e:
-            logger.warning(f"[StockScreener] Could not fetch market cap for {ticker}: {e}")
-            return (0.0, False, "Could not fetch market cap", "Unknown", "Unknown")
+            logger.warning(f"[StockScreener] Could not fetch details for {ticker}: {e}")
+            return (0.0, "Unknown", "Unknown")
 
-    def _check_volume(self, ticker: str) -> tuple[float, bool, str]:
+    def _fetch_volume_and_price(self, ticker: str) -> tuple[float, float]:
         """
-        Check if 30-day average daily volume meets minimum threshold.
+        Fetch (30-day avg volume, latest close) from ONE 30-day daily-bars call.
 
-        Args:
-            ticker: Stock symbol.
-
-        Returns:
-            (avg_volume, passed, reason_string)
+        Previously volume and price were two separate Polygon calls; combining
+        them halves the per-ticker request count against the free-tier limit.
         """
         try:
             end   = date.today()
             start = end - timedelta(days=30)
             df    = self._polygon.fetch_daily_bars(ticker, start, end)
-
             if df.empty:
-                return (0.0, False, f"No volume data available for {ticker}")
-
-            avg_volume = float(df["volume"].mean())
-            if avg_volume >= self._min_avg_volume:
-                return (avg_volume, True, "")
-            return (
-                avg_volume,
-                False,
-                f"Avg volume {avg_volume:,.0f} < minimum {self._min_avg_volume:,.0f}",
-            )
+                return (0.0, 0.0)
+            avg_volume   = float(df["volume"].mean())
+            latest_price = float(df["close"].iloc[-1])
+            return (avg_volume, latest_price)
         except Exception as e:
-            logger.warning(f"[StockScreener] Could not fetch volume for {ticker}: {e}")
-            return (0.0, False, f"Could not fetch volume data: {e}")
-
-    def _check_price(self, ticker: str) -> tuple[float, bool, str]:
-        """
-        Check if latest close price meets minimum threshold.
-
-        Args:
-            ticker: Stock symbol.
-
-        Returns:
-            (price, passed, reason_string)
-        """
-        try:
-            end   = date.today()
-            start = end - timedelta(days=5)
-            df    = self._polygon.fetch_daily_bars(ticker, start, end)
-
-            if df.empty:
-                return (0.0, False, f"No price data available for {ticker}")
-
-            price = float(df["close"].iloc[-1])
-            if price >= self._min_price:
-                return (price, True, "")
-            return (
-                price,
-                False,
-                f"Price ${price:.2f} < minimum ${self._min_price:.2f}",
-            )
-        except Exception as e:
-            logger.warning(f"[StockScreener] Could not fetch price for {ticker}: {e}")
-            return (0.0, False, f"Could not fetch price data: {e}")
+            logger.warning(f"[StockScreener] Could not fetch volume/price for {ticker}: {e}")
+            return (0.0, 0.0)
 
     def _check_tradeable_on_alpaca(self, ticker: str) -> tuple[bool, str]:
         """
