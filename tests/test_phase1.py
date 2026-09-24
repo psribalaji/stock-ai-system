@@ -475,10 +475,10 @@ class TestConfidenceScorer:
         assert result.regime_multiplier == 1.0
 
     def test_bear_regime_multiplier(self, scorer, raw_buy, buy_features):
-        """Non-bull regime should give multiplier = 0.85."""
+        """Non-bull regime should give multiplier = 0.92 (softened from 0.85)."""
         bear_feats = {**buy_features, "bull_regime": 0.0}
         result = scorer.score(raw_buy, "TEST", features=bear_feats)
-        assert result.regime_multiplier == 0.85
+        assert result.regime_multiplier == 0.92
 
     def test_high_volume_multiplier(self, scorer, raw_buy, buy_features):
         """High volume → multiplier 1.05."""
@@ -486,10 +486,10 @@ class TestConfidenceScorer:
         assert result.volume_multiplier == 1.05
 
     def test_low_volume_multiplier(self, scorer, raw_buy, buy_features):
-        """Low volume → multiplier 0.95."""
+        """Low volume → multiplier 0.98 (reduced penalty so avg-volume days still signal)."""
         low_vol = {**buy_features, "high_volume": 0.0}
         result = scorer.score(raw_buy, "TEST", features=low_vol)
-        assert result.volume_multiplier == 0.95
+        assert result.volume_multiplier == 0.98
 
     def test_blocked_below_min_confidence(self, scorer, buy_features):
         """Low base win rate → signal blocked."""
@@ -502,7 +502,7 @@ class TestConfidenceScorer:
             features_snapshot={**buy_features, "bull_regime": 0.0, "high_volume": 0.0},
         )
         result = scorer.score(low_signal, "TEST")
-        # 0.52 * 0.85 * 0.95 ≈ 0.42 → blocked
+        # 0.52 * 0.92 * 0.98 ≈ 0.47 → still below 0.60 → blocked
         assert result.blocked is True
         assert len(result.block_reason) > 0
 

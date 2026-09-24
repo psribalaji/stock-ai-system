@@ -3,8 +3,8 @@ signals/confidence_scorer.py — Statistical confidence scoring for raw signals.
 
 Confidence is computed STATISTICALLY — NOT by an LLM. Formula:
     base_confidence   = historical_win_rate(pattern, strategy, lookback=60)
-    regime_mult       = 1.0 if bull_regime else 0.85
-    volume_mult       = 1.05 if high_volume else 0.95
+    regime_mult       = 1.0 if bull_regime else 0.92
+    volume_mult       = 1.05 if high_volume else 0.98
     final_confidence  = clamp(base * regime_mult * volume_mult, 0.0, 1.0)
 
 Signals below config.risk.min_confidence (0.60) are blocked here.
@@ -121,8 +121,10 @@ class ConfidenceScorer:
         base = self._get_win_rate(signal.pattern, signal.strategy, ticker)
 
         # 2. Regime adjustment
+        # Non-bull penalty softened 0.85 -> 0.92 so borderline trend/vol signals
+        # (seed win-rate 0.62-0.65) can still clear the 0.60 gate in non-bull markets.
         bull_regime = bool(feats.get("bull_regime", 0))
-        regime_mult = 1.0 if bull_regime else 0.85
+        regime_mult = 1.0 if bull_regime else 0.92
 
         # 3. Volume adjustment (1.2 threshold per config — lowered from 1.5)
         # Penalty reduced: 0.98 not 0.95, so average-volume days still produce signals

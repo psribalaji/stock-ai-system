@@ -359,6 +359,9 @@ class ParquetStore:
             df.loc[idx, "pnl_pct"]      = round(pnl_pct, 6)
             df.loc[idx, "close_reason"] = close_reason
             df.loc[idx, "closed_at"]    = datetime.now(timezone.utc).isoformat()
+            # Record win/loss outcome so the ConfidenceScorer can learn real
+            # win rates from history instead of relying on seed defaults forever.
+            df.loc[idx, "outcome"]      = "WIN" if pnl_pct > 0 else "LOSS"
 
             df.to_parquet(path, engine="pyarrow", compression="snappy", index=False)
             self._s3_upload(path)
@@ -380,6 +383,29 @@ class ParquetStore:
             (audit["status"] == "submitted") & (audit["direction"] == "BUY")
         ]
         return set(open_buys["ticker"].unique())
+
+    def get_open_trade_entries(self) -> dict[str, "pd.Timestamp"]:
+        """
+        Map each open (submitted) BUY ticker to its most recent entry timestamp.
+
+        Used by the broker-closed detector so an exit is only recorded when a SELL
+        fill post-dates the entry — a stale SELL from an earlier round-trip must
+        not close a position that is still held.
+        """
+        audit = self.load_audit()
+        if audit.empty or "status" not in audit.columns:
+            return {}
+        open_buys = audit[
+            (audit["status"] == "submitted") & (audit["direction"] == "BUY")
+        ].copy()
+        if open_buys.empty:
+            return {}
+        open_buys["timestamp_submitted"] = pd.to_datetime(
+            open_buys["timestamp_submitted"], utc=True
+        )
+        return (
+            open_buys.groupby("ticker")["timestamp_submitted"].max().to_dict()
+        )
 
     # ── DATA VALIDATION ──────────────────────────────────────────
 

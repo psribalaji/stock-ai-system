@@ -459,9 +459,14 @@ class TradingScheduler:
             # Any ticker with an open audit BUY that's no longer in Alpaca positions
             # was closed by the broker — fetch the fill price and write the exit.
             try:
-                audit_open = self.store.get_open_trade_tickers()
-                for ticker in audit_open - open_tickers:
-                    exit_price = alpaca.get_last_filled_sell(ticker)
+                audit_entries = self.store.get_open_trade_entries()
+                for ticker in set(audit_entries) - open_tickers:
+                    # Only treat as broker-closed if a SELL actually filled AFTER
+                    # this position's entry. Otherwise a transient empty positions
+                    # read (or a stale SELL from a prior round-trip) would wrongly
+                    # close a position that is still held.
+                    entry_time = audit_entries.get(ticker)
+                    exit_price = alpaca.get_last_filled_sell(ticker, after=entry_time)
                     if exit_price:
                         self.store.close_open_trade(ticker, exit_price, "broker_closed")
                         logger.info(f"[Scheduler] Broker-closed exit written for {ticker} @ ${exit_price:.2f}")
