@@ -38,6 +38,7 @@ class OrderResult:
     ticker: str
     direction: str
     strategy: str
+    pattern: str
     qty: float
     entry_price: float
     stop_loss_price: float
@@ -724,6 +725,7 @@ class OrderExecutor:
             ticker=decision.ticker,
             direction=decision.direction,
             strategy=decision.strategy,
+            pattern=decision.pattern,
             qty=qty,
             entry_price=decision.entry_price,
             stop_loss_price=decision.stop_loss_price,
@@ -747,6 +749,7 @@ class OrderExecutor:
                 "ticker":              r.ticker,
                 "direction":           r.direction,
                 "strategy":            r.strategy,
+                "pattern":             r.pattern,
                 "qty":                 r.qty,
                 "entry_price":         r.entry_price,
                 "stop_loss_price":     r.stop_loss_price,

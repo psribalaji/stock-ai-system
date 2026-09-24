@@ -242,28 +242,36 @@ class ConfidenceScorer:
             Win rate or None if insufficient history.
         """
         lookback = self.config.signals.confidence_lookback
+        min_samples = 10
         try:
-            df = self.store.load_signals()
-            if df.empty:
+            # Win rates come from ACTUAL closed trades in the audit log, which
+            # carries the WIN/LOSS outcome written by ParquetStore.close_open_trade.
+            # (The signals store records what we *predicted*, not how it turned out.)
+            df = self.store.load_audit()
+            if df.empty or "outcome" not in df.columns or "pattern" not in df.columns:
                 return None
 
-            # Filter to relevant pattern+strategy+ticker outcomes
-            mask = (
-                (df["pattern"] == pattern) &
-                (df["strategy"] == strategy) &
-                (df["ticker"] == ticker) &
-                (df["outcome"].notna())
-            )
-            subset = df[mask].tail(lookback)
-            if len(subset) < 10:
-                return None  # Not enough history
+            closed = df[df["outcome"].notna()]
+            if closed.empty:
+                return None
 
-            win_rate = (subset["outcome"] == "WIN").sum() / len(subset)
-            logger.debug(
-                f"[ConfidenceScorer] Historical win rate for {ticker}/{pattern}: "
-                f"{win_rate:.3f} ({len(subset)} trades)"
-            )
-            return float(win_rate)
+            # Prefer the most specific history available:
+            #   1. pattern + strategy   2. pattern only
+            # Ticker is intentionally NOT required — a $500 account rarely gathers
+            # enough per-ticker trades, so we pool by pattern for a usable sample.
+            for mask in (
+                (closed["pattern"] == pattern) & (closed["strategy"] == strategy),
+                (closed["pattern"] == pattern),
+            ):
+                subset = closed[mask].tail(lookback)
+                if len(subset) >= min_samples:
+                    win_rate = (subset["outcome"] == "WIN").sum() / len(subset)
+                    logger.debug(
+                        f"[ConfidenceScorer] Learned win rate for {pattern}: "
+                        f"{win_rate:.3f} ({len(subset)} closed trades)"
+                    )
+                    return float(win_rate)
+            return None  # Not enough closed-trade history yet
         except Exception:
             return None
 
