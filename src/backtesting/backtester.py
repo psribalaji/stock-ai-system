@@ -378,6 +378,11 @@ class Backtester:
         pos_size_pct   = cfg.risk.max_position_pct
         stop_pct       = cfg.risk.stop_loss_pct
         rr_ratio       = cfg.risk.reward_risk_ratio
+        # Transaction costs — previously configured but never applied, which
+        # inflated backtest returns. slippage_pct is charged per side (buys fill
+        # worse, sells fill worse); commission is a flat per-fill cost.
+        slippage       = cfg.backtest.slippage_pct
+        commission     = cfg.backtest.commission
 
         cash: float                             = initial_capital
         positions: dict[str, BacktestPosition] = {}
@@ -404,9 +409,9 @@ class Backtester:
             for ticker in list(pending_sells):
                 if ticker in positions and ticker in day_price:
                     pos   = positions.pop(ticker)
-                    fill  = day_price[ticker]["open"]
-                    pnl   = (fill - pos.entry_price) * pos.quantity
-                    cash += fill * pos.quantity
+                    fill  = day_price[ticker]["open"] * (1 - slippage)  # sell fills worse
+                    pnl   = (fill - pos.entry_price) * pos.quantity - commission
+                    cash += fill * pos.quantity - commission
                     closed_trades.append(BacktestTrade(
                         ticker=ticker,
                         entry_date=pos.entry_date,
@@ -431,7 +436,7 @@ class Backtester:
                 if len(positions) >= max_positions:
                     continue  # position limit hit
 
-                fill        = day_price[ticker]["open"]
+                fill        = day_price[ticker]["open"] * (1 + slippage)  # buy fills worse
                 portfolio_v = cash + sum(
                     positions[t].quantity * price_data[t].loc[today, "close"]
                     if t in price_data and today in price_data[t].index else 0
@@ -441,7 +446,7 @@ class Backtester:
                 alloc    = portfolio_v * pos_size_pct
                 quantity = alloc / fill if fill > 0 else 0
 
-                if quantity <= 0 or cash < alloc:
+                if quantity <= 0 or cash < alloc + commission:
                     continue
 
                 stop  = fill * (1 - stop_pct)
@@ -449,7 +454,6 @@ class Backtester:
 
                 # ATR trailing stop: use ATR from features if available
                 atr_mult = cfg.risk.trailing_stop_atr_mult
-                atr_val = feats.get("atr_14", 0) if ticker in feature_data and today in feature_data[ticker] else 0
                 feats = feature_data.get(ticker, {}).get(today, {})
                 atr_val = float(feats.get("atr_14", 0)) if feats.get("atr_14") else 0
 
@@ -460,7 +464,7 @@ class Backtester:
 
                 atr_trail = atr_mult * atr_val if atr_val > 0 else fill * stop_pct
 
-                cash -= fill * quantity
+                cash -= fill * quantity + commission
                 positions[ticker] = BacktestPosition(
                     ticker=ticker,
                     entry_date=today,
@@ -492,9 +496,10 @@ class Backtester:
 
                 # Stop loss: triggered if low breaches stop
                 if ohlc["low"] <= pos.stop_price:
-                    fill  = max(ohlc["open"], pos.stop_price)  # gap-down protection
-                    pnl   = (fill - pos.entry_price) * pos.quantity
-                    cash += fill * pos.quantity
+                    raw   = max(ohlc["open"], pos.stop_price)  # gap-down protection
+                    fill  = raw * (1 - slippage)               # sell fills worse
+                    pnl   = (fill - pos.entry_price) * pos.quantity - commission
+                    cash += fill * pos.quantity - commission
                     closed_trades.append(BacktestTrade(
                         ticker=ticker,
                         entry_date=pos.entry_date,
@@ -512,9 +517,9 @@ class Backtester:
 
                 # Take profit: triggered if high reaches target
                 elif ohlc["high"] >= pos.take_profit:
-                    fill  = pos.take_profit
-                    pnl   = (fill - pos.entry_price) * pos.quantity
-                    cash += fill * pos.quantity
+                    fill  = pos.take_profit * (1 - slippage)   # sell fills worse
+                    pnl   = (fill - pos.entry_price) * pos.quantity - commission
+                    cash += fill * pos.quantity - commission
                     closed_trades.append(BacktestTrade(
                         ticker=ticker,
                         entry_date=pos.entry_date,
