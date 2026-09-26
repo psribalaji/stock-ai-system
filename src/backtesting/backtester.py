@@ -363,6 +363,32 @@ class Backtester:
 
     # ── Simulation loop ───────────────────────────────────────────────────────
 
+    _MARKET_PROXIES = ("QQQ", "SPY")
+
+    def _market_regime_by_date(
+        self, price_data: dict[str, pd.DataFrame], trading_days: list[date]
+    ) -> dict[date, bool]:
+        """
+        Per-day broad-market regime: True when the proxy (QQQ, else SPY) close is
+        above its trailing 200-day SMA. Mirrors DecisionEngine._market_regime.
+
+        No lookahead: pandas rolling() uses only past+current bars. Missing days
+        default to bullish (fail open) via the caller's .get(today, True).
+        """
+        proxy = next((p for p in self._MARKET_PROXIES
+                      if p in price_data and not price_data[p].empty), None)
+        if proxy is None:
+            logger.warning("[Backtester] No QQQ/SPY proxy in data — regime gate inactive")
+            return {}
+        df = price_data[proxy].sort_index()
+        sma200 = df["close"].rolling(200, min_periods=200).mean()
+        out: dict[date, bool] = {}
+        for d in trading_days:
+            if d in df.index:
+                s = sma200.loc[d]
+                out[d] = bool(pd.notna(s) and df.loc[d, "close"] > s)
+        return out
+
     def _simulate(
         self,
         tickers: list[str],
@@ -383,6 +409,11 @@ class Backtester:
         # worse, sells fill worse); commission is a flat per-fill cost.
         slippage       = cfg.backtest.slippage_pct
         commission     = cfg.backtest.commission
+        # Deployed-logic parity: volatility-targeted sizing reference (mirrors
+        # RiskManager) and the hard market-regime gate (mirrors DecisionEngine —
+        # no new longs when the market proxy is below its 200-day SMA).
+        ref_atr_pct    = getattr(cfg.risk, "reference_atr_pct", 0.0)
+        market_ok      = self._market_regime_by_date(price_data, trading_days)
 
         cash: float                             = initial_capital
         positions: dict[str, BacktestPosition] = {}
@@ -442,8 +473,18 @@ class Backtester:
                     if t in price_data and today in price_data[t].index else 0
                     for t in positions
                 )
+                # Volatility-targeted sizing (mirrors RiskManager): scale the
+                # position down when ATR% exceeds the reference; never above cap.
+                feats = feature_data.get(ticker, {}).get(today, {})
+                atr_val = float(feats.get("atr_14", 0)) if feats.get("atr_14") else 0
+                eff_pos_pct = pos_size_pct
+                if ref_atr_pct > 0 and atr_val > 0 and fill > 0:
+                    atr_pct = atr_val / fill
+                    if atr_pct > ref_atr_pct:
+                        eff_pos_pct = pos_size_pct * (ref_atr_pct / atr_pct)
+
                 # Recalculate quantity at fill price
-                alloc    = portfolio_v * pos_size_pct
+                alloc    = portfolio_v * eff_pos_pct
                 quantity = alloc / fill if fill > 0 else 0
 
                 if quantity <= 0 or cash < alloc + commission:
@@ -454,8 +495,6 @@ class Backtester:
 
                 # ATR trailing stop: use ATR from features if available
                 atr_mult = cfg.risk.trailing_stop_atr_mult
-                feats = feature_data.get(ticker, {}).get(today, {})
-                atr_val = float(feats.get("atr_14", 0)) if feats.get("atr_14") else 0
 
                 if atr_val > 0:
                     trailing_stop = fill - (atr_mult * atr_val)
@@ -563,6 +602,9 @@ class Backtester:
                             continue
 
                         if raw_signal.direction == "BUY":
+                            # Hard regime gate: no new longs in a market downtrend.
+                            if not market_ok.get(today, True):
+                                continue
                             if ticker not in pending_buys and len(positions) + len(pending_buys) < max_positions:
                                 pending_buys[ticker] = {
                                     "strategy":   strategy.NAME,
