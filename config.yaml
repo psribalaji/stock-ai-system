@@ -52,6 +52,20 @@ assets:
     # Finance
     - JPM
     - GS
+    # Cybersecurity
+    - PANW
+    - ZS
+    - FTNT
+    - S
+    # AI / semiconductors & data infrastructure
+    - SMCI
+    - MU
+    - ARM
+    - ANET
+    - SNOW
+    - DDOG
+    - NOW
+    - UBER
   crypto:
     - BTC
     # SOL removed — Polygon returns no data for it (153d stale), signals unreliable
@@ -65,9 +79,7 @@ assets:
     - XLI     # Industrials/Defence sector ETF
     - XLF     # Financials sector ETF
   watchlist:                   # Signals computed but no orders placed
-    - ASML
-    - ARM
-    - SNOW
+    - ASML                     # ARM, SNOW promoted to tradeable stocks (2026-09)
 
 # ── Risk Management ───────────────────────────────────────────────
 risk:
