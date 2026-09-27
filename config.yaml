@@ -203,6 +203,7 @@ discovery:
   min_price:            5.0
   max_candidates:       20
   mention_spike_factor: 2.0
+  movers_min_change_pct: 5.0   # market-movers scanner: min |%| daily move to count as trending
   reddit_subreddits:
     - wallstreetbets
     - investing

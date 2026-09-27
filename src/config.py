@@ -144,6 +144,7 @@ class DiscoveryConfig(BaseModel):
     min_price:            float      = 5.0
     max_candidates:       int        = 20
     mention_spike_factor: float      = 3.0
+    movers_min_change_pct: float     = 5.0   # market-movers scanner: min |%| daily move
     reddit_subreddits:    List[str]  = ["wallstreetbets", "investing", "stocks", "stockmarket"]
     news_lookback_hours:  int        = 48
     auto_approve:         bool       = False  # True for paper trading, False for live

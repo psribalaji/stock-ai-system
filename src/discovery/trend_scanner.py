@@ -97,11 +97,12 @@ class TrendScanner:
 
         news_results   = self._scan_news_velocity()
         reddit_results = self._scan_apewisdom()
+        movers_results = self._scan_market_movers()
 
         # Merge: deduplicate by ticker, aggregate across sources
         merged: dict[str, TrendingTicker] = {}
 
-        for tt in news_results + reddit_results:
+        for tt in news_results + reddit_results + movers_results:
             if tt.ticker in existing:
                 continue
             if tt.ticker in merged:
@@ -129,6 +130,65 @@ class TrendScanner:
         return ranked[:max_candidates]
 
     # ── Sub-scanners ──────────────────────────────────────────────────────────
+
+    def _scan_market_movers(self) -> list[TrendingTicker]:
+        """
+        Surface today's top % gainers via Polygon's market snapshot.
+
+        This is the purely price/volume-driven source: it catches ANY stock
+        breaking out today regardless of how (or whether) news/Reddit mention it
+        — the piece that makes discovery genuinely dynamic rather than hype-only.
+        Enrichment (name/sector/market cap) is left to the StockScreener, which
+        caches it; this scanner only needs ticker + % change + price.
+        """
+        try:
+            from src.ingestion.polygon_client import PolygonClient
+            client = PolygonClient()
+            min_move = getattr(
+                getattr(self.config, "discovery", None), "movers_min_change_pct", 5.0
+            )
+            try:
+                snaps = client._client.get_snapshot_direction("stocks", direction="gainers")
+            except TypeError:
+                snaps = client._client.get_snapshot_direction(direction="gainers")
+
+            now = datetime.now(timezone.utc)
+            results: list[TrendingTicker] = []
+            for s in (snaps or []):
+                ticker = getattr(s, "ticker", None)
+                if not ticker:
+                    continue
+                pct = getattr(s, "todays_change_percent", None)
+                if pct is None:
+                    pct = getattr(s, "todays_change_perc", 0.0) or 0.0
+                if abs(pct) < min_move:
+                    continue
+                # Price from the day bar, else last trade
+                price = 0.0
+                day = getattr(s, "day", None)
+                if day is not None:
+                    price = float(getattr(day, "close", 0) or 0)
+                if price <= 0:
+                    lt = getattr(s, "last_trade", None)
+                    price = float(getattr(lt, "price", 0) or 0) if lt else 0.0
+
+                results.append(TrendingTicker(
+                    ticker        = ticker,
+                    company_name  = "Unknown",
+                    sector        = "Unknown",
+                    mention_count = 1,
+                    mention_spike = round(abs(pct), 2),   # rank movers by % move
+                    avg_sentiment = 1.0 if pct > 0 else -1.0,
+                    sources       = ["movers"],
+                    first_seen    = now,
+                    price         = price,
+                    market_cap    = 0.0,
+                ))
+            logger.info(f"[TrendScanner] Movers scan: {len(results)} gainers ≥ {min_move}%")
+            return results
+        except Exception as e:
+            logger.warning(f"[TrendScanner] Market movers scan failed: {e}")
+            return []
 
     def _scan_news_velocity(self) -> list[TrendingTicker]:
         """
