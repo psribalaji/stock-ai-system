@@ -343,7 +343,10 @@ class TradingScheduler:
                     if not news_df.empty:
                         self.store.save_news(ticker, news_df)
                         logger.debug(f"[Scheduler] News synced {ticker}: {len(news_df)} articles")
-                    _time.sleep(0.5)  # Finnhub free tier: 60 req/min
+                    # Finnhub free tier is 60 req/min → need >=1s between calls.
+                    # 0.5s (=120/min) was 2x over the limit and caused the
+                    # FinnhubAPIException storm during data_sync.
+                    _time.sleep(1.1)
                 except Exception as exc:
                     logger.warning(f"[Scheduler] News sync failed for {ticker}: {exc}")
         except Exception as exc:
