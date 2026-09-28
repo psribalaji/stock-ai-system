@@ -133,47 +133,39 @@ class TrendScanner:
 
     def _scan_market_movers(self) -> list[TrendingTicker]:
         """
-        Surface today's top % gainers via Polygon's market snapshot.
+        Surface today's top % gainers via Alpaca's market-movers screener.
 
         This is the purely price/volume-driven source: it catches ANY stock
         breaking out today regardless of how (or whether) news/Reddit mention it
         — the piece that makes discovery genuinely dynamic rather than hype-only.
-        Enrichment (name/sector/market cap) is left to the StockScreener, which
-        caches it; this scanner only needs ticker + % change + price.
+        Uses Alpaca (free with existing data keys); Polygon's snapshot endpoint
+        is paywalled. Enrichment (name/sector/market cap) is left to the
+        StockScreener, which caches it; this scanner needs only ticker/%/price.
         """
         try:
-            from src.ingestion.polygon_client import PolygonClient
-            client = PolygonClient()
-            min_move = getattr(
-                getattr(self.config, "discovery", None), "movers_min_change_pct", 5.0
+            from alpaca.data.historical.screener import ScreenerClient
+            from alpaca.data.requests import MarketMoversRequest
+            from src.secrets import Secrets
+
+            disc     = getattr(self.config, "discovery", None)
+            min_move = getattr(disc, "movers_min_change_pct", 5.0)
+            top      = max(getattr(disc, "max_candidates", 20), 10)
+
+            client = ScreenerClient(
+                api_key=Secrets.alpaca_api_key(),
+                secret_key=Secrets.alpaca_secret_key(),
             )
-            try:
-                snaps = client._client.get_snapshot_direction("stocks", direction="gainers")
-            except TypeError:
-                snaps = client._client.get_snapshot_direction(direction="gainers")
+            movers = client.get_market_movers(MarketMoversRequest(top=top))
 
             now = datetime.now(timezone.utc)
             results: list[TrendingTicker] = []
-            for s in (snaps or []):
-                ticker = getattr(s, "ticker", None)
-                if not ticker:
-                    continue
-                pct = getattr(s, "todays_change_percent", None)
-                if pct is None:
-                    pct = getattr(s, "todays_change_perc", 0.0) or 0.0
+            for m in (getattr(movers, "gainers", None) or []):
+                pct   = float(getattr(m, "percent_change", 0) or 0)
                 if abs(pct) < min_move:
                     continue
-                # Price from the day bar, else last trade
-                price = 0.0
-                day = getattr(s, "day", None)
-                if day is not None:
-                    price = float(getattr(day, "close", 0) or 0)
-                if price <= 0:
-                    lt = getattr(s, "last_trade", None)
-                    price = float(getattr(lt, "price", 0) or 0) if lt else 0.0
-
+                price = float(getattr(m, "price", 0) or 0)
                 results.append(TrendingTicker(
-                    ticker        = ticker,
+                    ticker        = m.symbol,
                     company_name  = "Unknown",
                     sector        = "Unknown",
                     mention_count = 1,
@@ -184,7 +176,7 @@ class TrendScanner:
                     price         = price,
                     market_cap    = 0.0,
                 ))
-            logger.info(f"[TrendScanner] Movers scan: {len(results)} gainers ≥ {min_move}%")
+            logger.info(f"[TrendScanner] Movers scan (Alpaca): {len(results)} gainers ≥ {min_move}%")
             return results
         except Exception as e:
             logger.warning(f"[TrendScanner] Market movers scan failed: {e}")
