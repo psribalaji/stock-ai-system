@@ -456,7 +456,7 @@ class TradingScheduler:
 
             positions     = alpaca._trading_client.get_all_positions()
             open_tickers  = {p.symbol for p in positions}
-            stop_pct      = self.config.risk.stop_loss_pct  # 0.07
+            stop_pct      = self.config.effective_risk.stop_loss_pct  # live: 0.06, paper: 0.07
 
             # ── Detect broker-closed positions (Alpaca filled a stop/TP bracket) ──
             # Any ticker with an open audit BUY that's no longer in Alpaca positions

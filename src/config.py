@@ -71,6 +71,8 @@ class SignalsConfig(BaseModel):
     rsi_overbought: int = 70
     ma_short: int = 50
     ma_long: int = 200
+    # Patterns blocked from trading regardless of confidence (manual kill list)
+    disabled_patterns: List[str] = []
 
 class BacktestConfig(BaseModel):
     train_start: str = "2015-01-01"

@@ -121,6 +121,8 @@ signals:
   rsi_overbought:      70      # RSI above this = potential sell signal
   ma_short:            50      # Short moving average period
   ma_long:             200     # Long moving average period
+  disabled_patterns:           # Blocked regardless of confidence. Remove to re-enable.
+    - full_ma_alignment_adx    # 2026-10-16: 0/4 live wins (-3.9/-6.0/-7.1/-7.3%) — buys extended trends
 
 # ── Backtesting ───────────────────────────────────────────────────
 backtest:

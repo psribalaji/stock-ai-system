@@ -1197,3 +1197,30 @@ class TestFullPipelineIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "--tb=short"])
+
+
+# ── Live-fix regression tests (2026-10-16) ───────────────────────────────────
+
+def test_disabled_pattern_is_blocked(buy_features):
+    """A pattern in signals.disabled_patterns is blocked regardless of confidence."""
+    from src.signals.confidence_scorer import ConfidenceScorer
+    scorer = ConfidenceScorer()
+    scorer.config.signals.disabled_patterns = ["golden_cross_high_volume"]
+    sig = RawSignal(direction="BUY", strategy="trend_following", strength=0.9,
+                    reason="test", pattern="golden_cross_high_volume",
+                    features_snapshot={**buy_features, "bull_regime": 1.0, "high_volume": 1.0})
+    try:
+        result = scorer.score(sig, "TEST")
+        assert result.blocked is True
+        assert "disabled" in result.block_reason
+    finally:
+        scorer.config.signals.disabled_patterns = ["full_ma_alignment_adx"]
+
+
+def test_non_common_share_filter():
+    """Warrants/rights/units and odd symbols are filtered; common stocks pass."""
+    from src.discovery.trend_scanner import _is_non_common_share
+    for junk in ["FVNNU", "BIAFW", "IRHOR", "BRK.B", "ABC1", ""]:
+        assert _is_non_common_share(junk), junk
+    for ok in ["PANW", "NVDA", "GOOGL", "S", "AMD"]:
+        assert not _is_non_common_share(ok), ok

@@ -270,8 +270,8 @@ class OrderExecutor:
         self, ticker: str, entry_price: float, atr: float
     ) -> None:
         """Register a new trailing stop after a BUY order is submitted."""
-        mult = self.config.risk.trailing_stop_atr_mult
-        stop_price = entry_price - (mult * atr) if atr > 0 else entry_price * (1 - self.config.risk.stop_loss_pct)
+        mult = self.config.effective_risk.trailing_stop_atr_mult
+        stop_price = entry_price - (mult * atr) if atr > 0 else entry_price * (1 - self.config.effective_risk.stop_loss_pct)
         self._trailing_stops[ticker] = {
             "high_water": entry_price,
             "stop_price": stop_price,
@@ -293,7 +293,7 @@ class OrderExecutor:
         Returns:
             List of tickers whose trailing stop was triggered.
         """
-        mult = self.config.risk.trailing_stop_atr_mult
+        mult = self.config.effective_risk.trailing_stop_atr_mult
         triggered = []
         for ticker, state in list(self._trailing_stops.items()):
             price = price_map.get(ticker)
@@ -308,7 +308,7 @@ class OrderExecutor:
                 if atr > 0:
                     new_stop = price - (mult * atr)
                 else:
-                    new_stop = price * (1 - self.config.risk.stop_loss_pct)
+                    new_stop = price * (1 - self.config.effective_risk.stop_loss_pct)
                 state["high_water"] = price
                 # Never lower an existing stop
                 state["stop_price"] = max(state["stop_price"], new_stop)
@@ -468,15 +468,15 @@ class OrderExecutor:
                 except Exception as exc:
                     logger.warning(f"[OrderExecutor] ATR fetch failed for {ticker}: {exc}")
 
-                mult = self.config.risk.trailing_stop_atr_mult
+                mult = self.config.effective_risk.trailing_stop_atr_mult
                 if atr > 0:
                     stop = high_water - mult * atr
                 else:
-                    stop = entry_price * (1 - self.config.risk.stop_loss_pct)
+                    stop = entry_price * (1 - self.config.effective_risk.stop_loss_pct)
 
                 # Safety net: a restored stop must never sit at or above the current
                 # price, or the next position check would sell immediately.
-                max_stop = current_price * (1 - self.config.risk.stop_loss_pct)
+                max_stop = current_price * (1 - self.config.effective_risk.stop_loss_pct)
                 if stop >= current_price:
                     logger.warning(
                         f"[OrderExecutor] {ticker}: computed stop ${stop:.2f} >= current "

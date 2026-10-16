@@ -146,6 +146,9 @@ class ConfidenceScorer:
         block_reason = (
             f"Confidence {final:.3f} below minimum {min_conf}" if blocked else ""
         )
+        if signal.pattern in self.config.signals.disabled_patterns:
+            blocked = True
+            block_reason = f"Pattern '{signal.pattern}' is disabled in config"
 
         if blocked:
             logger.debug(

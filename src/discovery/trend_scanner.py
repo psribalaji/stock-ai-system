@@ -53,6 +53,18 @@ _REDDIT_BLOCKLIST: set[str] = {
     "IPO", "EPS", "ROI", "ROE", "DCF", "TTM", "YTD", "QTD", "MOM",
 }
 
+def _is_non_common_share(symbol: str) -> bool:
+    """
+    True for symbols that aren't plain common stock: anything with a '.', '/'
+    or digit, and 5-letter Nasdaq symbols whose 5th letter marks a warrant (W),
+    right (R) or unit (U) — e.g. FVNNU, BIAFW, IRHOR. These dominate the daily
+    top-gainers list but fail screening and waste rate-limited API calls.
+    """
+    if not symbol or not symbol.isalpha():
+        return True
+    return len(symbol) == 5 and symbol[-1] in "WRU"
+
+
 _TICKER_PATTERN     = re.compile(r'\$([A-Z]{1,5})\b')
 _REDDIT_TICKER_PAT  = re.compile(r'\b([A-Z]{2,5})\b')
 
@@ -160,6 +172,8 @@ class TrendScanner:
             now = datetime.now(timezone.utc)
             results: list[TrendingTicker] = []
             for m in (getattr(movers, "gainers", None) or []):
+                if _is_non_common_share(m.symbol):
+                    continue   # warrants/rights/units — untradeable noise that burns Polygon quota
                 pct   = float(getattr(m, "percent_change", 0) or 0)
                 if abs(pct) < min_move:
                     continue
