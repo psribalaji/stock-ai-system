@@ -89,7 +89,7 @@ risk:
   max_open_positions:  15      # Max concurrent open positions
   min_confidence:      0.60    # Minimum signal confidence to trade
   stop_loss_pct:       0.07    # Hard stop loss: 7% below entry
-  trailing_stop_atr_mult: 3.0  # Trailing stop: 3x ATR below highest price
+  trailing_stop_atr_mult: 2.5  # Trailing stop: 2.5x ATR below highest price (was 3.0 — gave back gains; 2026-10-21 backtest: CAGR 13.8->16.3%, PF 2.33->2.61)
   reward_risk_ratio:     2.0  # Take profit at 2x the risk (entry - stop)
   daily_loss_limit:    0.02    # Circuit breaker: 2% daily loss
   max_drawdown_pct:    0.15    # Kill switch: 15% peak-to-trough
@@ -105,7 +105,7 @@ live_risk:
   max_open_positions:  5       # 5 concurrent positions max (down from 15)
   min_confidence:      0.62    # Slightly above paper floor — relaxed until live history builds up
   stop_loss_pct:       0.06    # 6% stop loss — tighter than paper
-  trailing_stop_atr_mult: 3.0  # Same trailing stop multiplier
+  trailing_stop_atr_mult: 2.5  # Same as paper (was 3.0)
   reward_risk_ratio:     2.0  # Same 2:1 reward-to-risk
   daily_loss_limit:    0.015   # 1.5% daily loss circuit breaker (~$15 on $1k)
   max_drawdown_pct:    0.08    # 8% kill switch (~$80 on $1k) — stop before it hurts

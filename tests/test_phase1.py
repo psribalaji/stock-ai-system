@@ -825,17 +825,17 @@ class TestRiskManager:
             assert isinstance(decision.risk_notes, list)
 
     def test_trailing_stop_computed_from_atr(self, rm, scored_buy, healthy_portfolio):
-        """When ATR is provided, trailing stop = entry - (3 * ATR) per config."""
+        """When ATR is provided, trailing stop = entry - (mult * ATR) per config."""
         decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST", atr_value=4.5)
         assert decision.approved is True
-        assert abs(decision.trailing_stop_price - (100.0 - 3.0 * 4.5)) < 0.01
+        assert abs(decision.trailing_stop_price - (100.0 - _atr_mult() * 4.5)) < 0.01
         assert decision.trailing_stop_atr == 4.5
 
     def test_trailing_stop_uses_tighter_stop(self, rm, scored_buy, healthy_portfolio):
         """Effective stop should be the tighter of hard stop and trailing stop."""
-        # Hard stop = 100 * 0.93 = 93. Trailing = 100 - 3*2 = 94. Trailing is tighter.
+        # Trailing (100 - mult*2) is tighter than the hard stop.
         decision = rm.validate(scored_buy, 100.0, healthy_portfolio, "TEST", atr_value=2.0)
-        assert decision.stop_loss_price == 100.0 - (3.0 * 2.0)  # 94.0
+        assert decision.stop_loss_price == 100.0 - (_atr_mult() * 2.0)
 
     def test_trailing_stop_falls_back_without_atr(self, rm, scored_buy, healthy_portfolio):
         """Without ATR, trailing stop equals hard stop."""
@@ -859,7 +859,7 @@ class TestOrderExecutorTrailingStop:
         state = executor.get_trailing_stop("NVDA")
         assert state is not None
         assert state["high_water"] == 120.0
-        assert abs(state["stop_price"] - (120.0 - 3.0 * 4.5)) < 0.01
+        assert abs(state["stop_price"] - (120.0 - _atr_mult() * 4.5)) < 0.01
 
     def test_trailing_stop_trails_up(self, executor):
         executor.register_trailing_stop("NVDA", entry_price=120.0, atr=4.5)
@@ -867,7 +867,7 @@ class TestOrderExecutorTrailingStop:
         assert triggered == []
         state = executor.get_trailing_stop("NVDA")
         assert state["high_water"] == 135.0
-        assert abs(state["stop_price"] - (135.0 - 3.0 * 4.5)) < 0.01
+        assert abs(state["stop_price"] - (135.0 - _atr_mult() * 4.5)) < 0.01
 
     def test_trailing_stop_never_moves_down(self, executor):
         executor.register_trailing_stop("NVDA", entry_price=120.0, atr=4.5)
@@ -1224,3 +1224,9 @@ def test_non_common_share_filter():
         assert _is_non_common_share(junk), junk
     for ok in ["PANW", "NVDA", "GOOGL", "S", "AMD"]:
         assert not _is_non_common_share(ok), ok
+
+
+def _atr_mult() -> float:
+    """Trailing-stop ATR multiplier from config (tests must not hardcode it)."""
+    from src.config import get_config
+    return get_config().effective_risk.trailing_stop_atr_mult
