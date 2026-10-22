@@ -102,7 +102,7 @@ live_risk:
   max_position_pct:    0.10    # 10% per position (~$10 on $100) — fractional shares
   max_sector_pct:      0.30    # 30% sector cap — fewer positions so slightly more concentration ok
   max_crypto_pct:      0.10    # Same crypto cap
-  max_open_positions:  5       # 5 concurrent positions max (down from 15)
+  max_open_positions:  7       # 7 concurrent (was 5; 2026-10-22 backtest @10%: CAGR 13.2->22.2%, same max DD)
   min_confidence:      0.62    # Slightly above paper floor — relaxed until live history builds up
   stop_loss_pct:       0.06    # 6% stop loss — tighter than paper
   trailing_stop_atr_mult: 2.5  # Same as paper (was 3.0)
